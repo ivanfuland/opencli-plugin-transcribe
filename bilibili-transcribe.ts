@@ -41,14 +41,14 @@ cli({
   args: [
     { name: 'url', required: true, positional: true, help: 'Bilibili 视频 URL 或 BVID (如 BV1xxxxxx)' },
     { name: 'lang', required: false, help: '字幕语言代码 (如 zh-CN, en-US)' },
-    { name: 'mode', required: false, default: 'grouped', choices: ['grouped', 'raw'], help: '输出模式：grouped 或 raw' },
+    { name: 'mode', required: false, default: 'raw', choices: ['raw', 'grouped'], help: '输出模式：raw（逐句带时间戳）或 grouped（合并段落）' },
     { name: 'force-asr', required: false, type: 'boolean', default: false, help: '跳过字幕，直接使用 Whisper' },
     { name: 'keep-audio', required: false, type: 'boolean', default: false, help: '保留临时音频文件' },
   ],
   func: async (page, kwargs) => {
     const inputUrl = String(kwargs.url);
     const lang = kwargs.lang ? String(kwargs.lang) : '';
-    const mode = String(kwargs.mode || 'grouped');
+    const mode = String(kwargs.mode || 'raw');
     const forceAsr = Boolean(kwargs['force-asr']);
     const keepAudio = Boolean(kwargs['keep-audio']);
 

@@ -83,14 +83,14 @@ cli({
   args: [
     { name: "url", required: true, positional: true, help: "Bilibili \u89C6\u9891 URL \u6216 BVID (\u5982 BV1xxxxxx)" },
     { name: "lang", required: false, help: "\u5B57\u5E55\u8BED\u8A00\u4EE3\u7801 (\u5982 zh-CN, en-US)" },
-    { name: "mode", required: false, default: "grouped", choices: ["grouped", "raw"], help: "\u8F93\u51FA\u6A21\u5F0F\uFF1Agrouped \u6216 raw" },
+    { name: "mode", required: false, default: "raw", choices: ["raw", "grouped"], help: "\u8F93\u51FA\u6A21\u5F0F\uFF1Araw\uFF08\u9010\u53E5\u5E26\u65F6\u95F4\u6233\uFF09\u6216 grouped\uFF08\u5408\u5E76\u6BB5\u843D\uFF09" },
     { name: "force-asr", required: false, type: "boolean", default: false, help: "\u8DF3\u8FC7\u5B57\u5E55\uFF0C\u76F4\u63A5\u4F7F\u7528 Whisper" },
     { name: "keep-audio", required: false, type: "boolean", default: false, help: "\u4FDD\u7559\u4E34\u65F6\u97F3\u9891\u6587\u4EF6" }
   ],
   func: async (page, kwargs) => {
     const inputUrl = String(kwargs.url);
     const lang = kwargs.lang ? String(kwargs.lang) : "";
-    const mode = String(kwargs.mode || "grouped");
+    const mode = String(kwargs.mode || "raw");
     const forceAsr = Boolean(kwargs["force-asr"]);
     const keepAudio = Boolean(kwargs["keep-audio"]);
     const videoUrl = normalizeBilibiliUrl(inputUrl);

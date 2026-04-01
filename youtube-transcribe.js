@@ -19,14 +19,14 @@ cli({
   args: [
     { name: "url", required: true, positional: true, help: "YouTube video URL or video ID" },
     { name: "lang", required: false, help: "Language code (e.g. en, zh-Hans). Omit to auto-select" },
-    { name: "mode", required: false, default: "grouped", choices: ["grouped", "raw"], help: "Output mode: grouped or raw" },
+    { name: "mode", required: false, default: "raw", choices: ["raw", "grouped"], help: "Output mode: raw (per-segment with timestamps) or grouped (merged paragraphs)" },
     { name: "force-asr", required: false, type: "boolean", default: false, help: "Skip subtitles and always use Whisper" },
     { name: "keep-audio", required: false, type: "boolean", default: false, help: "Keep temporary audio file after transcription" }
   ],
   func: async (page, kwargs) => {
     const url = String(kwargs.url);
     const lang = kwargs.lang ? String(kwargs.lang) : "";
-    const mode = String(kwargs.mode || "grouped");
+    const mode = String(kwargs.mode || "raw");
     const forceAsr = Boolean(kwargs["force-asr"]);
     const keepAudio = Boolean(kwargs["keep-audio"]);
     const videoId = parseVideoId(url);
