@@ -1,0 +1,6 @@
+{
+  "name": "opencli-plugin-transcribe",
+  "version": "0.1.0",
+  "description": "YouTube/Bilibili transcribe: subtitle-first with Whisper large-v3 fallback",
+  "opencli": ">=1.5.0"
+}

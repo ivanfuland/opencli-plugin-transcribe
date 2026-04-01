@@ -1,0 +1,19 @@
+{
+  "name": "opencli-plugin-transcribe",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "YouTube/Bilibili transcribe: subtitle-first with Whisper large-v3 fallback",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "vitest": "^4.1.2"
+  }
+}
