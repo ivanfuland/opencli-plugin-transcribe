@@ -3,22 +3,9 @@
  * Tests the formatting and flow decisions; external calls (page, yt-dlp, whisper) are mocked.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parseVideoId } from '../youtube-transcribe.js';
 import { formatRaw, formatGrouped } from '../_format.js';
 import { langMap } from '../_lang-map.js';
-
-// ── Helpers used by the command ──────────────────────────────────────────────
-
-function parseVideoId(input: string): string {
-  if (!input.startsWith('http')) return input;
-  try {
-    const parsed = new URL(input);
-    if (parsed.searchParams.has('v')) return parsed.searchParams.get('v')!;
-    if (parsed.hostname === 'youtu.be') return parsed.pathname.slice(1).split('/')[0];
-    const pathMatch = parsed.pathname.match(/^\/(shorts|embed|live|v)\/([^/?]+)/);
-    if (pathMatch) return pathMatch[2];
-  } catch { /* treat as ID */ }
-  return input;
-}
 
 // ── parseVideoId ─────────────────────────────────────────────────────────────
 

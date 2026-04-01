@@ -106,11 +106,11 @@ cli({
             if (!xml?.length) return { error: 'Caption URL returned empty response' };
 
             function getAttr(tag, name) {
-              const needle = name + '=\\"';
+              const needle = name + '="';
               const idx = tag.indexOf(needle);
               if (idx === -1) return '';
               const valStart = idx + needle.length;
-              const valEnd = tag.indexOf('\\"', valStart);
+              const valEnd = tag.indexOf('"', valStart);
               if (valEnd === -1) return '';
               return tag.substring(valStart, valEnd);
             }
@@ -119,7 +119,7 @@ cli({
               return s.replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&#39;', "'");
             }
 
-            const isFormat3 = xml.includes('<p t=\\"');
+            const isFormat3 = xml.includes('<p t="');
             const marker = isFormat3 ? '<p ' : '<text ';
             const endMarker = isFormat3 ? '</p>' : '</text>';
             const results = [];
@@ -146,7 +146,7 @@ cli({
                 durSec = parseFloat(getAttr(attrStr, 'dur')) || 0;
               }
 
-              const text = decodeEntities(content.replace(/<[^>]+>/g, '')).split('\\\\n').join(' ').trim();
+              const text = decodeEntities(content.replace(/<[^>]+>/g, '')).split('\\n').join(' ').trim();
               if (text) results.push({ start: startSec, end: startSec + durSec, text });
               pos = tagEnd + endMarker.length;
             }
@@ -190,7 +190,7 @@ cli({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function parseVideoId(input: string): string {
+export function parseVideoId(input: string): string {
   if (!input.startsWith('http')) return input;
   try {
     const parsed = new URL(input);

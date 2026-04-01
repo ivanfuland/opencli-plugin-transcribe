@@ -4,7 +4,7 @@
  * External calls (page, yt-dlp, whisper) are not exercised here.
  */
 import { describe, it, expect } from 'vitest';
-import { normalizeBilibiliUrl } from '../bilibili-transcribe.js';
+import { normalizeBilibiliUrl, extractBvid } from '../bilibili-transcribe.js';
 import { formatRaw, formatGrouped } from '../_format.js';
 import type { Segment } from '../_format.js';
 
@@ -89,11 +89,6 @@ describe('Whisper fallback', () => {
 // ── BVID validation ───────────────────────────────────────────────────────────
 
 describe('BVID extraction', () => {
-  function extractBvid(input: string): string | null {
-    const match = input.match(/BV[a-zA-Z0-9]+/);
-    return match ? match[0] : null;
-  }
-
   it('edge case: extracts BVID from full URL', () => {
     expect(extractBvid('https://www.bilibili.com/video/BV1xx411c7mD')).toBe('BV1xx411c7mD');
   });

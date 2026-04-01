@@ -54,8 +54,15 @@ export async function transcribeWithWhisper(
     }
   }
 
-  const raw = fs.readFileSync(jsonOutput, 'utf-8');
-  const parsed = JSON.parse(raw) as { segments?: Array<{ start: number; end: number; text: string }> };
+  let parsed: { segments?: Array<{ start: number; end: number; text: string }> };
+  try {
+    const raw = fs.readFileSync(jsonOutput, 'utf-8');
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new TranscribeError(
+      `Failed to read Whisper output at ${jsonOutput}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   const segments = parsed.segments ?? [];
   return segments.map(s => ({

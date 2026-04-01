@@ -226,7 +226,7 @@ async function fetchBilibiliSubtitle(
   return { segments, source };
 }
 
-function extractBvid(input: string): string | null {
+export function extractBvid(input: string): string | null {
   const match = input.match(/BV[a-zA-Z0-9]+/);
   return match ? match[0] : null;
 }
