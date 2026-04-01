@@ -107,10 +107,13 @@ cli({
         console.error(`Warning: subtitle fetch failed (${msg}), falling back to Whisper`);
       }
     }
+    console.error("[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper large-v3 ASR...");
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
     try {
+      console.error("[transcribe] \u6B63\u5728\u901A\u8FC7 yt-dlp \u4E0B\u8F7D\u97F3\u9891...");
       const audioPath = await downloadAudio(videoUrl, tempDir);
+      console.error("[transcribe] \u97F3\u9891\u5C31\u7EEA\uFF0C\u5F00\u59CB Whisper \u8F6C\u5F55\uFF08\u53EF\u80FD\u9700\u8981\u6570\u5206\u949F\uFF09...");
       const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
       if (segments.length === 0) {
         throw new TranscribeError("Whisper \u6CA1\u6709\u8FD4\u56DE\u4EFB\u4F55\u7247\u6BB5\uFF0C\u97F3\u9891\u53EF\u80FD\u8FC7\u77ED\u6216\u65E0\u58F0\u3002");

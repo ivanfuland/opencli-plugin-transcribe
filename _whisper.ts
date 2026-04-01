@@ -75,7 +75,16 @@ export async function transcribeWithWhisper(
 async function runWhisper(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = '';
+    const startTime = Date.now();
+
+    // Heartbeat: print elapsed time every 30s so callers know the process is alive
+    const heartbeat = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      process.stderr.write(`[whisper] transcribing... ${elapsed}s elapsed\n`);
+    }, 30_000);
+
     const proc = execFile('whisper', args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
+      clearInterval(heartbeat);
       if (err) {
         reject(new TranscribeError(
           `Whisper transcription failed: ${stderr.trim() || err.message}`

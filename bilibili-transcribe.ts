@@ -73,11 +73,14 @@ cli({
     }
 
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
+    console.error('[transcribe] 未找到字幕，回落到 Whisper large-v3 ASR...');
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
 
     try {
+      console.error('[transcribe] 正在通过 yt-dlp 下载音频...');
       const audioPath = await downloadAudio(videoUrl, tempDir);
+      console.error('[transcribe] 音频就绪，开始 Whisper 转录（可能需要数分钟）...');
       const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
 
       if (segments.length === 0) {

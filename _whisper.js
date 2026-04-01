@@ -48,7 +48,14 @@ async function transcribeWithWhisper(audioPath, outputDir, lang) {
 async function runWhisper(args) {
   return new Promise((resolve, reject) => {
     let stderr = "";
+    const startTime = Date.now();
+    const heartbeat = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startTime) / 1e3);
+      process.stderr.write(`[whisper] transcribing... ${elapsed}s elapsed
+`);
+    }, 3e4);
     const proc = execFile("whisper", args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
+      clearInterval(heartbeat);
       if (err) {
         reject(new TranscribeError(
           `Whisper transcription failed: ${stderr.trim() || err.message}`

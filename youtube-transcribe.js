@@ -141,10 +141,17 @@ cli({
         }
       }
     }
+    console.error("[transcribe] No subtitles found. Falling back to Whisper large-v3 ASR...");
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
     try {
+      if (ytAudioUrl) {
+        console.error("[transcribe] Downloading audio via streaming URL...");
+      } else {
+        console.error("[transcribe] Downloading audio via yt-dlp...");
+      }
       const audioPath = ytAudioUrl ? await downloadAudioFromUrl(ytAudioUrl, tempDir) : await downloadAudio(url, tempDir);
+      console.error("[transcribe] Audio ready. Starting Whisper transcription (this may take several minutes)...");
       const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
       if (segments.length === 0) {
         throw new TranscribeError("Whisper returned no segments. The audio may be too short or silent.");
