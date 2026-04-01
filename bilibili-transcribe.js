@@ -78,8 +78,8 @@ cli({
   description: "\u8F6C\u5F55 Bilibili \u89C6\u9891\uFF08\u5B57\u5E55\u4F18\u5148\uFF0C\u65E0\u5B57\u5E55\u65F6 Whisper large-v3 \u515C\u5E95\uFF09",
   domain: "www.bilibili.com",
   strategy: Strategy.COOKIE,
-  timeoutSeconds: 1800,
-  // 30 min — Whisper large-v3 on long videos can take a while
+  timeoutSeconds: 25200,
+  // 7 hours — Whisper large-v3 on long videos can take a while
   args: [
     { name: "url", required: true, positional: true, help: "Bilibili \u89C6\u9891 URL \u6216 BVID (\u5982 BV1xxxxxx)" },
     { name: "lang", required: false, help: "\u5B57\u5E55\u8BED\u8A00\u4EE3\u7801 (\u5982 zh-CN, en-US)" },
