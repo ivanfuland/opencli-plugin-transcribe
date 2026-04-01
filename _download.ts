@@ -51,7 +51,7 @@ export async function downloadAudioFromUrl(streamUrl: string, outputDir: string)
  * Download audio from a URL as WAV using yt-dlp.
  * Returns the path to the downloaded WAV file.
  */
-export async function downloadAudio(url: string, outputDir: string, cookiesBrowser = 'chrome+GNOMEKEYRING'): Promise<string> {
+export async function downloadAudio(url: string, outputDir: string, cookiesBrowser = 'chrome'): Promise<string> {
   await checkYtDlp();
   await checkFfmpeg();
 
@@ -70,7 +70,15 @@ export async function downloadAudio(url: string, outputDir: string, cookiesBrows
         '--no-playlist',
         url,
       ],
-      { timeout: DOWNLOAD_TIMEOUT_MS },
+      {
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          // Ensure yt-dlp picks GNOME keyring even when DESKTOP_SESSION is unset
+          // (e.g. when launched outside a full GUI session)
+          DESKTOP_SESSION: process.env.DESKTOP_SESSION || 'gnome',
+        },
+      },
       (err) => {
         if (err) {
           reject(new TranscribeError(

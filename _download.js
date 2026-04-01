@@ -30,7 +30,7 @@ async function downloadAudioFromUrl(streamUrl, outputDir) {
   });
   return outputPath;
 }
-async function downloadAudio(url, outputDir, cookiesBrowser = "chrome+GNOMEKEYRING") {
+async function downloadAudio(url, outputDir, cookiesBrowser = "chrome") {
   await checkYtDlp();
   await checkFfmpeg();
   const outputPath = path.join(outputDir, "audio.wav");
@@ -51,7 +51,15 @@ async function downloadAudio(url, outputDir, cookiesBrowser = "chrome+GNOMEKEYRI
         "--no-playlist",
         url
       ],
-      { timeout: DOWNLOAD_TIMEOUT_MS },
+      {
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          // Ensure yt-dlp picks GNOME keyring even when DESKTOP_SESSION is unset
+          // (e.g. when launched outside a full GUI session)
+          DESKTOP_SESSION: process.env.DESKTOP_SESSION || "gnome"
+        }
+      },
       (err) => {
         if (err) {
           reject(new TranscribeError(
