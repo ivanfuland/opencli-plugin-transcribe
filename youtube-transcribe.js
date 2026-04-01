@@ -54,11 +54,11 @@ cli({
       console.error("[transcribe] Checking for subtitles via yt-dlp...");
       const tempDir2 = createTempDir();
       try {
-        const segments = await downloadSubtitlesViaYtDlp(videoUrl, tempDir2, lang);
-        if (segments && segments.length > 0) {
-          const source = segments._isAuto ? "auto_caption" : "manual_caption";
+        const result = await downloadSubtitlesViaYtDlp(videoUrl, tempDir2, lang);
+        if (result && result.segments.length > 0) {
+          const source = result.isAuto ? "auto_caption" : "manual_caption";
           cleanupTempDir(tempDir2, false);
-          return mode === "raw" ? formatRaw(segments, source) : formatGrouped(segments, source);
+          return mode === "raw" ? formatRaw(result.segments, source) : formatGrouped(result.segments, source);
         }
         cleanupTempDir(tempDir2, false);
       } catch (err) {
@@ -106,25 +106,25 @@ async function downloadSubtitlesViaYtDlp(videoUrl, outputDir, lang) {
   const subLang = lang || "zh,en,ja,ko";
   try {
     await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, false);
-    const result = findAndParseSubFile(outputDir);
-    if (result) {
-      console.error(`[transcribe] Found manual subtitles`);
-      const segments = result;
-      segments._isAuto = false;
-      return segments;
+    const segments = findAndParseSubFile(outputDir);
+    if (segments) {
+      console.error("[transcribe] Found manual subtitles");
+      return { segments, isAuto: false };
     }
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[transcribe] Manual subtitle download failed: ${msg}`);
   }
   try {
     await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, true);
-    const result = findAndParseSubFile(outputDir);
-    if (result) {
-      console.error(`[transcribe] Found auto-generated subtitles`);
-      const segments = result;
-      segments._isAuto = true;
-      return segments;
+    const segments = findAndParseSubFile(outputDir);
+    if (segments) {
+      console.error("[transcribe] Found auto-generated subtitles");
+      return { segments, isAuto: true };
     }
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[transcribe] Auto subtitle download failed: ${msg}`);
   }
   return null;
 }

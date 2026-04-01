@@ -68,13 +68,13 @@ cli({
       console.error('[transcribe] Checking for subtitles via yt-dlp...');
       const tempDir = createTempDir();
       try {
-        const segments = await downloadSubtitlesViaYtDlp(videoUrl, tempDir, lang);
-        if (segments && segments.length > 0) {
-          const source = segments._isAuto ? 'auto_caption' : 'manual_caption';
+        const result = await downloadSubtitlesViaYtDlp(videoUrl, tempDir, lang);
+        if (result && result.segments.length > 0) {
+          const source = result.isAuto ? 'auto_caption' : 'manual_caption';
           cleanupTempDir(tempDir, false);
           return mode === 'raw'
-            ? formatRaw(segments, source)
-            : formatGrouped(segments, source);
+            ? formatRaw(result.segments, source)
+            : formatGrouped(result.segments, source);
         }
         cleanupTempDir(tempDir, false);
       } catch (err) {
@@ -129,8 +129,9 @@ export function parseVideoId(input: string): string {
   return input;
 }
 
-interface SegmentsWithMeta extends Array<Segment> {
-  _isAuto?: boolean;
+interface SubtitleResult {
+  segments: Segment[];
+  isAuto: boolean;
 }
 
 /**
@@ -141,36 +142,34 @@ async function downloadSubtitlesViaYtDlp(
   videoUrl: string,
   outputDir: string,
   lang: string,
-): Promise<SegmentsWithMeta | null> {
+): Promise<SubtitleResult | null> {
   const outputTemplate = path.join(outputDir, 'sub');
 
   // Try manual subtitles first
   const subLang = lang || 'zh,en,ja,ko';
   try {
     await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, false);
-    const result = findAndParseSubFile(outputDir);
-    if (result) {
-      console.error(`[transcribe] Found manual subtitles`);
-      const segments: SegmentsWithMeta = result;
-      segments._isAuto = false;
-      return segments;
+    const segments = findAndParseSubFile(outputDir);
+    if (segments) {
+      console.error('[transcribe] Found manual subtitles');
+      return { segments, isAuto: false };
     }
-  } catch {
-    // Manual subs not available, try auto
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[transcribe] Manual subtitle download failed: ${msg}`);
   }
 
   // Try auto-generated subtitles
   try {
     await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, true);
-    const result = findAndParseSubFile(outputDir);
-    if (result) {
-      console.error(`[transcribe] Found auto-generated subtitles`);
-      const segments: SegmentsWithMeta = result;
-      segments._isAuto = true;
-      return segments;
+    const segments = findAndParseSubFile(outputDir);
+    if (segments) {
+      console.error('[transcribe] Found auto-generated subtitles');
+      return { segments, isAuto: true };
     }
-  } catch {
-    // No auto subs either
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[transcribe] Auto subtitle download failed: ${msg}`);
   }
 
   return null;
