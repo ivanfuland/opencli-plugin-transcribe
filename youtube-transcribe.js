@@ -1,48 +1,35 @@
-/**
- * opencli-plugin-transcribe: youtube transcribe command
- *
- * Subtitle-first (InnerTube Android API), Whisper large-v3 fallback.
- * Reference: src/clis/youtube/transcript.ts (2026-04-01)
- */
-
-import { cli, Strategy } from '@jackwener/opencli/registry';
-import { TranscribeError } from './_errors.js';
-import { downloadAudio, downloadAudioFromUrl } from './_download.js';
-import { transcribeWithWhisper } from './_whisper.js';
-import { formatRaw, formatGrouped, type Segment } from './_format.js';
-import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
-import { langMap } from './_lang-map.js';
-
+import { cli, Strategy } from "@jackwener/opencli/registry";
+import { TranscribeError } from "./_errors.js";
+import { downloadAudio, downloadAudioFromUrl } from "./_download.js";
+import { transcribeWithWhisper } from "./_whisper.js";
+import { formatRaw, formatGrouped } from "./_format.js";
+import { createTempDir, cleanupTempDir, registerCleanupHook } from "./_temp.js";
+import { langMap } from "./_lang-map.js";
 cli({
-  site: 'youtube',
-  name: 'transcribe',
-  description: 'Transcribe a YouTube video (subtitles first, Whisper large-v3 fallback)',
-  domain: 'www.youtube.com',
+  site: "youtube",
+  name: "transcribe",
+  description: "Transcribe a YouTube video (subtitles first, Whisper large-v3 fallback)",
+  domain: "www.youtube.com",
   strategy: Strategy.COOKIE,
   args: [
-    { name: 'url', required: true, positional: true, help: 'YouTube video URL or video ID' },
-    { name: 'lang', required: false, help: 'Language code (e.g. en, zh-Hans). Omit to auto-select' },
-    { name: 'mode', required: false, default: 'grouped', choices: ['grouped', 'raw'], help: 'Output mode: grouped or raw' },
-    { name: 'force-asr', required: false, type: 'boolean', default: false, help: 'Skip subtitles and always use Whisper' },
-    { name: 'keep-audio', required: false, type: 'boolean', default: false, help: 'Keep temporary audio file after transcription' },
+    { name: "url", required: true, positional: true, help: "YouTube video URL or video ID" },
+    { name: "lang", required: false, help: "Language code (e.g. en, zh-Hans). Omit to auto-select" },
+    { name: "mode", required: false, default: "grouped", choices: ["grouped", "raw"], help: "Output mode: grouped or raw" },
+    { name: "force-asr", required: false, type: "boolean", default: false, help: "Skip subtitles and always use Whisper" },
+    { name: "keep-audio", required: false, type: "boolean", default: false, help: "Keep temporary audio file after transcription" }
   ],
   func: async (page, kwargs) => {
     const url = String(kwargs.url);
-    const lang = kwargs.lang ? String(kwargs.lang) : '';
-    const mode = String(kwargs.mode || 'grouped');
-    const forceAsr = Boolean(kwargs['force-asr']);
-    const keepAudio = Boolean(kwargs['keep-audio']);
-
+    const lang = kwargs.lang ? String(kwargs.lang) : "";
+    const mode = String(kwargs.mode || "grouped");
+    const forceAsr = Boolean(kwargs["force-asr"]);
+    const keepAudio = Boolean(kwargs["keep-audio"]);
     const videoId = parseVideoId(url);
-    const whisperLang = lang ? langMap(lang) : undefined;
-    let ytAudioUrl: string | null = null;
-
-    // ── Step 1: Try platform subtitles (unless --force-asr) ──────────────────
+    const whisperLang = lang ? langMap(lang) : void 0;
+    let ytAudioUrl = null;
     if (!forceAsr && page) {
-      // Navigate to the video page so ytInitialPlayerResponse is populated
       const videoPageUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      await page.goto(videoPageUrl, { waitUntil: 'domcontentloaded' });
-
+      await page.goto(videoPageUrl, { waitUntil: "domcontentloaded" });
       const captionData = await page.evaluate(`
         (() => {
           const data = window.ytInitialPlayerResponse;
@@ -84,17 +71,12 @@ cli({
           };
         })()
       `);
-
       if (captionData?.audioUrl) ytAudioUrl = captionData.audioUrl;
-
       if (captionData && !captionData.error && !captionData.noCaption) {
-        // Warn if requested language not matched
         if (captionData.requestedLang && !captionData.langMatched && !captionData.langPrefixMatched) {
-          console.error(`Warning: --lang "${captionData.requestedLang}" not found. Using "${captionData.language}" instead. Available: ${captionData.available.join(', ')}`);
+          console.error(`Warning: --lang "${captionData.requestedLang}" not found. Using "${captionData.language}" instead. Available: ${captionData.available.join(", ")}`);
         }
-
-        // Fetch and parse caption XML
-        const segments: Segment[] | { error: string } = await page.evaluate(`
+        const segments = await page.evaluate(`
           (async () => {
             const resp = await fetch(${JSON.stringify(captionData.captionUrl)});
             const xml = await resp.text();
@@ -151,52 +133,39 @@ cli({
             return results;
           })()
         `);
-
         if (Array.isArray(segments) && segments.length > 0) {
-          const source = captionData.kind === 'asr' ? 'auto_caption' : 'manual_caption';
-          return mode === 'raw'
-            ? formatRaw(segments as Segment[], source)
-            : formatGrouped(segments as Segment[], source);
+          const source = captionData.kind === "asr" ? "auto_caption" : "manual_caption";
+          return mode === "raw" ? formatRaw(segments, source) : formatGrouped(segments, source);
         }
       }
-      // Fall through to Whisper
     }
-
-    // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
-
     try {
-      // Prefer InnerTube streaming URL (bypasses yt-dlp cookie requirements)
-      const audioPath = ytAudioUrl
-        ? await downloadAudioFromUrl(ytAudioUrl, tempDir)
-        : await downloadAudio(url, tempDir);
+      const audioPath = ytAudioUrl ? await downloadAudioFromUrl(ytAudioUrl, tempDir) : await downloadAudio(url, tempDir);
       const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
-
       if (segments.length === 0) {
-        throw new TranscribeError('Whisper returned no segments. The audio may be too short or silent.');
+        throw new TranscribeError("Whisper returned no segments. The audio may be too short or silent.");
       }
-
-      return mode === 'raw'
-        ? formatRaw(segments, 'whisper_large_v3')
-        : formatGrouped(segments, 'whisper_large_v3');
+      return mode === "raw" ? formatRaw(segments, "whisper_large_v3") : formatGrouped(segments, "whisper_large_v3");
     } finally {
       deregister();
       cleanupTempDir(tempDir, keepAudio);
     }
-  },
+  }
 });
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-export function parseVideoId(input: string): string {
-  if (!input.startsWith('http')) return input;
+function parseVideoId(input) {
+  if (!input.startsWith("http")) return input;
   try {
     const parsed = new URL(input);
-    if (parsed.searchParams.has('v')) return parsed.searchParams.get('v')!;
-    if (parsed.hostname === 'youtu.be') return parsed.pathname.slice(1).split('/')[0];
+    if (parsed.searchParams.has("v")) return parsed.searchParams.get("v");
+    if (parsed.hostname === "youtu.be") return parsed.pathname.slice(1).split("/")[0];
     const pathMatch = parsed.pathname.match(/^\/(shorts|embed|live|v)\/([^/?]+)/);
     if (pathMatch) return pathMatch[2];
-  } catch { /* treat as video ID */ }
+  } catch {
+  }
   return input;
 }
+export {
+  parseVideoId
+};
