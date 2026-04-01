@@ -37,6 +37,7 @@ cli({
   description: '转录 Bilibili 视频（字幕优先，无字幕时 Whisper large-v3 兜底）',
   domain: 'www.bilibili.com',
   strategy: Strategy.COOKIE,
+  timeoutSeconds: 1800, // 30 min — Whisper large-v3 on long videos can take a while
   args: [
     { name: 'url', required: true, positional: true, help: 'Bilibili 视频 URL 或 BVID (如 BV1xxxxxx)' },
     { name: 'lang', required: false, help: '字幕语言代码 (如 zh-CN, en-US)' },
