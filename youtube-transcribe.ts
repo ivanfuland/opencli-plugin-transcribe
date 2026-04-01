@@ -134,45 +134,131 @@ interface SubtitleResult {
   isAuto: boolean;
 }
 
+/** Language preference order when user doesn't specify a language */
+const LANG_PREFERENCE = ['zh-Hans', 'zh-Hant', 'zh', 'en', 'ja', 'ko'];
+
+interface SubtitleInfo {
+  subtitles: Record<string, unknown[]>;
+  automatic_captions: Record<string, unknown[]>;
+}
+
 /**
- * Download subtitles using yt-dlp and parse the json3 output.
- * Tries manual subtitles first, then auto-generated.
+ * Fetch available subtitle languages via yt-dlp --dump-json,
+ * pick the best match, then download it.
  */
 async function downloadSubtitlesViaYtDlp(
   videoUrl: string,
   outputDir: string,
   lang: string,
 ): Promise<SubtitleResult | null> {
+  // Step 1: Get available subtitle languages
+  console.error('[transcribe] Fetching available subtitle languages...');
+  const info = await getSubtitleInfo(videoUrl);
+  const manualLangs = Object.keys(info.subtitles);
+  const autoLangs = Object.keys(info.automatic_captions);
+  console.error(`[transcribe] Manual: [${manualLangs.join(', ')}], Auto: ${autoLangs.length} languages`);
+
+  if (manualLangs.length === 0 && autoLangs.length === 0) return null;
+
+  // Step 2: Pick the best subtitle language
+  const picked = pickSubtitleLang(manualLangs, autoLangs, lang);
+  if (!picked) return null;
+
+  console.error(`[transcribe] Selected: ${picked.lang} (${picked.isAuto ? 'auto' : 'manual'})`);
+
+  // Step 3: Download that specific subtitle
   const outputTemplate = path.join(outputDir, 'sub');
+  await runYtDlpSubDownload(videoUrl, outputTemplate, picked.lang, picked.isAuto);
+  const segments = findAndParseSubFile(outputDir);
+  if (!segments) return null;
 
-  // Try manual subtitles first
-  const subLang = lang || 'zh,en,ja,ko';
-  try {
-    await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, false);
-    const segments = findAndParseSubFile(outputDir);
-    if (segments) {
-      console.error('[transcribe] Found manual subtitles');
-      return { segments, isAuto: false };
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[transcribe] Manual subtitle download failed: ${msg}`);
+  return { segments, isAuto: picked.isAuto };
+}
+
+/**
+ * Pick the best subtitle language based on availability and preference.
+ * Priority: user-specified lang > manual subs by preference > auto subs by preference > any manual > any auto
+ */
+function pickSubtitleLang(
+  manualLangs: string[],
+  autoLangs: string[],
+  userLang: string,
+): { lang: string; isAuto: boolean } | null {
+  // If user specified a language, look for exact match, then prefix match
+  if (userLang) {
+    const exactManual = manualLangs.find(l => l === userLang);
+    if (exactManual) return { lang: exactManual, isAuto: false };
+
+    const prefixManual = manualLangs.find(l => l.startsWith(userLang) || userLang.startsWith(l));
+    if (prefixManual) return { lang: prefixManual, isAuto: false };
+
+    const exactAuto = autoLangs.find(l => l === userLang);
+    if (exactAuto) return { lang: exactAuto, isAuto: true };
+
+    const prefixAuto = autoLangs.find(l => l.startsWith(userLang) || userLang.startsWith(l));
+    if (prefixAuto) return { lang: prefixAuto, isAuto: true };
   }
 
-  // Try auto-generated subtitles
-  try {
-    await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, true);
-    const segments = findAndParseSubFile(outputDir);
-    if (segments) {
-      console.error('[transcribe] Found auto-generated subtitles');
-      return { segments, isAuto: true };
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[transcribe] Auto subtitle download failed: ${msg}`);
+  // No user lang or no match — use preference order
+  for (const pref of LANG_PREFERENCE) {
+    const manual = manualLangs.find(l => l === pref);
+    if (manual) return { lang: manual, isAuto: false };
+  }
+  for (const pref of LANG_PREFERENCE) {
+    const manual = manualLangs.find(l => l.startsWith(pref) || pref.startsWith(l));
+    if (manual) return { lang: manual, isAuto: false };
+  }
+  for (const pref of LANG_PREFERENCE) {
+    const auto = autoLangs.find(l => l === pref);
+    if (auto) return { lang: auto, isAuto: true };
+  }
+  for (const pref of LANG_PREFERENCE) {
+    const auto = autoLangs.find(l => l.startsWith(pref) || pref.startsWith(l));
+    if (auto) return { lang: auto, isAuto: true };
   }
 
+  // Fallback: first available manual, then first auto
+  if (manualLangs.length > 0) return { lang: manualLangs[0], isAuto: false };
+  if (autoLangs.length > 0) return { lang: autoLangs[0], isAuto: true };
   return null;
+}
+
+/** Get subtitle/caption metadata via yt-dlp --dump-json */
+function getSubtitleInfo(videoUrl: string): Promise<SubtitleInfo> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'yt-dlp',
+      [
+        '--dump-json', '--skip-download', '--no-playlist',
+        '--cookies-from-browser', 'chrome',
+        '--remote-components', 'ejs:github',
+        videoUrl,
+      ],
+      {
+        timeout: 60_000,
+        maxBuffer: 50 * 1024 * 1024,
+        env: {
+          ...process.env,
+          DESKTOP_SESSION: process.env.DESKTOP_SESSION || 'gnome',
+        },
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new TranscribeError(`yt-dlp metadata fetch failed: ${stderr?.trim() || err.message}`));
+          return;
+        }
+        try {
+          const json = JSON.parse(stdout);
+          resolve({
+            subtitles: json.subtitles || {},
+            automatic_captions: json.automatic_captions || {},
+          });
+        } catch {
+          reject(new TranscribeError('Failed to parse yt-dlp JSON output'));
+        }
+      },
+    );
+  });
 }
 
 function runYtDlpSubDownload(

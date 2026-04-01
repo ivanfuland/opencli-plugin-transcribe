@@ -1,13 +1,318 @@
-import { execFile } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
+// youtube-transcribe.ts
+import { execFile as execFile4 } from "node:child_process";
+import * as fs3 from "node:fs";
+import * as path4 from "node:path";
 import { cli, Strategy } from "@jackwener/opencli/registry";
-import { TranscribeError } from "./_errors.js";
-import { downloadAudio, downloadAudioFromUrl } from "./_download.js";
-import { transcribeWithWhisper } from "./_whisper.js";
-import { formatRaw, formatGrouped } from "./_format.js";
-import { createTempDir, cleanupTempDir, registerCleanupHook } from "./_temp.js";
-import { langMap } from "./_lang-map.js";
+
+// _errors.js
+var TranscribeError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TranscribeError";
+  }
+};
+
+// _download.js
+import { execFile as execFile2 } from "node:child_process";
+import * as path from "node:path";
+
+// _deps.js
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+async function checkDep(name, installHint) {
+  try {
+    await execFileAsync("which", [name]);
+  } catch {
+    throw new TranscribeError(`${name} not found. ${installHint}`);
+  }
+}
+async function checkYtDlp() {
+  await checkDep("yt-dlp", "Install: pip install yt-dlp  or  brew install yt-dlp");
+}
+async function checkWhisper() {
+  await checkDep("whisper", "Install: pip install openai-whisper");
+}
+async function checkFfmpeg() {
+  await checkDep("ffmpeg", "Install: brew install ffmpeg  or  apt install ffmpeg");
+}
+
+// _download.js
+var DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1e3;
+async function downloadAudioFromUrl(streamUrl, outputDir) {
+  await checkFfmpeg();
+  const outputPath = path.join(outputDir, "audio.wav");
+  await new Promise((resolve, reject) => {
+    let stderr = "";
+    const proc = execFile2(
+      "ffmpeg",
+      ["-y", "-i", streamUrl, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", outputPath],
+      { timeout: DOWNLOAD_TIMEOUT_MS },
+      (err) => {
+        if (err) {
+          reject(new TranscribeError(
+            `ffmpeg download failed: ${stderr.trim() || err.message}`
+          ));
+        } else {
+          resolve();
+        }
+      }
+    );
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
+    });
+  });
+  return outputPath;
+}
+async function downloadAudio(url, outputDir, cookiesBrowser = "chrome") {
+  await checkYtDlp();
+  await checkFfmpeg();
+  const outputPath = path.join(outputDir, "audio.wav");
+  await new Promise((resolve, reject) => {
+    let stderr = "";
+    const proc = execFile2(
+      "yt-dlp",
+      [
+        "-x",
+        "--audio-format",
+        "wav",
+        "-o",
+        outputPath,
+        "--cookies-from-browser",
+        cookiesBrowser,
+        "--remote-components",
+        "ejs:github",
+        "--no-playlist",
+        url
+      ],
+      {
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          // Ensure yt-dlp picks GNOME keyring even when DESKTOP_SESSION is unset
+          // (e.g. when launched outside a full GUI session)
+          DESKTOP_SESSION: process.env.DESKTOP_SESSION || "gnome"
+        }
+      },
+      (err) => {
+        if (err) {
+          reject(new TranscribeError(
+            `yt-dlp download failed: ${stderr.trim() || err.message}`
+          ));
+        } else {
+          resolve();
+        }
+      }
+    );
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
+    });
+  });
+  return outputPath;
+}
+
+// _whisper.js
+import { execFile as execFile3 } from "node:child_process";
+import * as fs from "node:fs";
+import * as path2 from "node:path";
+var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
+async function transcribeWithWhisper(audioPath, outputDir, lang) {
+  await checkWhisper();
+  const stem = path2.basename(audioPath, path2.extname(audioPath));
+  const jsonOutput = path2.join(outputDir, `${stem}.json`);
+  const baseArgs = [
+    audioPath,
+    "--model",
+    "large-v3",
+    "--output_format",
+    "json",
+    "--output_dir",
+    outputDir
+  ];
+  if (lang) baseArgs.push("--language", lang);
+  try {
+    await runWhisper([...baseArgs, "--device", "cuda"]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/cuda|CUDA|RuntimeError/i.test(msg)) {
+      console.error(`Warning: CUDA failed (${msg.split("\n")[0]}). Retrying on CPU...`);
+      await runWhisper([...baseArgs, "--device", "cpu"]);
+    } else {
+      throw err;
+    }
+  }
+  let parsed;
+  try {
+    const raw = fs.readFileSync(jsonOutput, "utf-8");
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new TranscribeError(
+      `Failed to read Whisper output at ${jsonOutput}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const segments = parsed.segments ?? [];
+  return segments.map((s) => ({
+    start: Number(s.start),
+    end: Number(s.end),
+    text: String(s.text).trim()
+  }));
+}
+async function runWhisper(args) {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    const startTime = Date.now();
+    const heartbeat = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startTime) / 1e3);
+      process.stderr.write(`[whisper] transcribing... ${elapsed}s elapsed
+`);
+    }, 3e4);
+    const proc = execFile3("whisper", args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
+      clearInterval(heartbeat);
+      if (err) {
+        reject(new TranscribeError(
+          `Whisper transcription failed: ${stderr.trim() || err.message}`
+        ));
+      } else {
+        resolve();
+      }
+    });
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
+    });
+  });
+}
+
+// _format.js
+var SENTENCE_END = /[.!?\u3002\uFF01\uFF1F\uFF0E]["'\u2019\u201D)]*\s*$/;
+var MAX_GROUP_SPAN_SECONDS = 30;
+var TRANSCRIPT_GROUP_GAP_SECONDS = 20;
+function formatRaw(segments, source) {
+  return segments.map((seg, i) => ({
+    index: i + 1,
+    start: Number(seg.start).toFixed(2) + "s",
+    end: Number(seg.end).toFixed(2) + "s",
+    text: seg.text,
+    source
+  }));
+}
+function formatGrouped(segments, source) {
+  if (segments.length === 0) return [];
+  const groups = groupBySentence(segments);
+  return groups.map((g) => ({
+    timestamp: fmtTime(g.start),
+    text: g.text,
+    source
+  }));
+}
+function groupBySentence(segments) {
+  const groups = [];
+  let buffer = "";
+  let bufferStart = 0;
+  let lastStart = 0;
+  const flush = () => {
+    if (buffer.trim()) {
+      groups.push({ start: bufferStart, text: buffer.trim() });
+      buffer = "";
+    }
+  };
+  for (const seg of segments) {
+    if (buffer && seg.start - lastStart > TRANSCRIPT_GROUP_GAP_SECONDS) {
+      flush();
+    }
+    if (buffer && seg.start - bufferStart > MAX_GROUP_SPAN_SECONDS) {
+      flush();
+    }
+    if (!buffer) bufferStart = seg.start;
+    buffer += (buffer ? " " : "") + seg.text;
+    lastStart = seg.start;
+    if (SENTENCE_END.test(seg.text)) flush();
+  }
+  flush();
+  return groups;
+}
+function fmtTime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor(sec % 3600 / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// _temp.js
+import * as fs2 from "node:fs";
+import * as os from "node:os";
+import * as path3 from "node:path";
+function createTempDir() {
+  return fs2.mkdtempSync(path3.join(os.tmpdir(), "opencli-transcribe-"));
+}
+function cleanupTempDir(dir, keepAudio) {
+  if (keepAudio) {
+    console.error(`Audio kept at: ${dir}`);
+    return;
+  }
+  try {
+    fs2.rmSync(dir, { recursive: true, force: true });
+  } catch {
+  }
+}
+function registerCleanupHook(dir) {
+  const handler = () => {
+    try {
+      fs2.rmSync(dir, { recursive: true, force: true });
+    } catch {
+    }
+  };
+  process.once("SIGINT", handler);
+  process.once("SIGTERM", handler);
+  return () => {
+    process.off("SIGINT", handler);
+    process.off("SIGTERM", handler);
+  };
+}
+
+// _lang-map.js
+var LANG_MAP = {
+  "zh-Hans": "zh",
+  "zh-Hant": "zh",
+  "zh-CN": "zh",
+  "zh-TW": "zh",
+  "zh-HK": "zh",
+  "en-US": "en",
+  "en-GB": "en",
+  "en-AU": "en",
+  "ja-JP": "ja",
+  "ko-KR": "ko",
+  "fr-FR": "fr",
+  "de-DE": "de",
+  "es-ES": "es",
+  "es-MX": "es",
+  "pt-BR": "pt",
+  "pt-PT": "pt",
+  "ru-RU": "ru",
+  "ar-SA": "ar",
+  "hi-IN": "hi",
+  "it-IT": "it",
+  "nl-NL": "nl",
+  "pl-PL": "pl",
+  "tr-TR": "tr",
+  "vi-VN": "vi",
+  "th-TH": "th",
+  "id-ID": "id",
+  "ms-MY": "ms"
+};
+function langMap(code) {
+  return LANG_MAP[code] ?? code;
+}
+
+// youtube-transcribe.ts
 cli({
   site: "youtube",
   name: "transcribe",
@@ -101,32 +406,93 @@ function parseVideoId(input) {
   }
   return input;
 }
+var LANG_PREFERENCE = ["zh-Hans", "zh-Hant", "zh", "en", "ja", "ko"];
 async function downloadSubtitlesViaYtDlp(videoUrl, outputDir, lang) {
-  const outputTemplate = path.join(outputDir, "sub");
-  const subLang = lang || "zh,en,ja,ko";
-  try {
-    await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, false);
-    const segments = findAndParseSubFile(outputDir);
-    if (segments) {
-      console.error("[transcribe] Found manual subtitles");
-      return { segments, isAuto: false };
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[transcribe] Manual subtitle download failed: ${msg}`);
+  console.error("[transcribe] Fetching available subtitle languages...");
+  const info = await getSubtitleInfo(videoUrl);
+  const manualLangs = Object.keys(info.subtitles);
+  const autoLangs = Object.keys(info.automatic_captions);
+  console.error(`[transcribe] Manual: [${manualLangs.join(", ")}], Auto: ${autoLangs.length} languages`);
+  if (manualLangs.length === 0 && autoLangs.length === 0) return null;
+  const picked = pickSubtitleLang(manualLangs, autoLangs, lang);
+  if (!picked) return null;
+  console.error(`[transcribe] Selected: ${picked.lang} (${picked.isAuto ? "auto" : "manual"})`);
+  const outputTemplate = path4.join(outputDir, "sub");
+  await runYtDlpSubDownload(videoUrl, outputTemplate, picked.lang, picked.isAuto);
+  const segments = findAndParseSubFile(outputDir);
+  if (!segments) return null;
+  return { segments, isAuto: picked.isAuto };
+}
+function pickSubtitleLang(manualLangs, autoLangs, userLang) {
+  if (userLang) {
+    const exactManual = manualLangs.find((l) => l === userLang);
+    if (exactManual) return { lang: exactManual, isAuto: false };
+    const prefixManual = manualLangs.find((l) => l.startsWith(userLang) || userLang.startsWith(l));
+    if (prefixManual) return { lang: prefixManual, isAuto: false };
+    const exactAuto = autoLangs.find((l) => l === userLang);
+    if (exactAuto) return { lang: exactAuto, isAuto: true };
+    const prefixAuto = autoLangs.find((l) => l.startsWith(userLang) || userLang.startsWith(l));
+    if (prefixAuto) return { lang: prefixAuto, isAuto: true };
   }
-  try {
-    await runYtDlpSubDownload(videoUrl, outputTemplate, subLang, true);
-    const segments = findAndParseSubFile(outputDir);
-    if (segments) {
-      console.error("[transcribe] Found auto-generated subtitles");
-      return { segments, isAuto: true };
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[transcribe] Auto subtitle download failed: ${msg}`);
+  for (const pref of LANG_PREFERENCE) {
+    const manual = manualLangs.find((l) => l === pref);
+    if (manual) return { lang: manual, isAuto: false };
   }
+  for (const pref of LANG_PREFERENCE) {
+    const manual = manualLangs.find((l) => l.startsWith(pref) || pref.startsWith(l));
+    if (manual) return { lang: manual, isAuto: false };
+  }
+  for (const pref of LANG_PREFERENCE) {
+    const auto = autoLangs.find((l) => l === pref);
+    if (auto) return { lang: auto, isAuto: true };
+  }
+  for (const pref of LANG_PREFERENCE) {
+    const auto = autoLangs.find((l) => l.startsWith(pref) || pref.startsWith(l));
+    if (auto) return { lang: auto, isAuto: true };
+  }
+  if (manualLangs.length > 0) return { lang: manualLangs[0], isAuto: false };
+  if (autoLangs.length > 0) return { lang: autoLangs[0], isAuto: true };
   return null;
+}
+function getSubtitleInfo(videoUrl) {
+  return new Promise((resolve, reject) => {
+    execFile4(
+      "yt-dlp",
+      [
+        "--dump-json",
+        "--skip-download",
+        "--no-playlist",
+        "--cookies-from-browser",
+        "chrome",
+        "--remote-components",
+        "ejs:github",
+        videoUrl
+      ],
+      {
+        timeout: 6e4,
+        maxBuffer: 50 * 1024 * 1024,
+        env: {
+          ...process.env,
+          DESKTOP_SESSION: process.env.DESKTOP_SESSION || "gnome"
+        }
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new TranscribeError(`yt-dlp metadata fetch failed: ${stderr?.trim() || err.message}`));
+          return;
+        }
+        try {
+          const json = JSON.parse(stdout);
+          resolve({
+            subtitles: json.subtitles || {},
+            automatic_captions: json.automatic_captions || {}
+          });
+        } catch {
+          reject(new TranscribeError("Failed to parse yt-dlp JSON output"));
+        }
+      }
+    );
+  });
 }
 function runYtDlpSubDownload(videoUrl, outputTemplate, subLang, autoSub) {
   const args = [
@@ -149,7 +515,7 @@ function runYtDlpSubDownload(videoUrl, outputTemplate, subLang, autoSub) {
   args.push(videoUrl);
   return new Promise((resolve, reject) => {
     let stderr = "";
-    execFile(
+    execFile4(
       "yt-dlp",
       args,
       {
@@ -172,10 +538,10 @@ function runYtDlpSubDownload(videoUrl, outputTemplate, subLang, autoSub) {
   });
 }
 function findAndParseSubFile(dir) {
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json3"));
+  const files = fs3.readdirSync(dir).filter((f) => f.endsWith(".json3"));
   if (files.length === 0) return null;
-  const filePath = path.join(dir, files[0]);
-  const content = fs.readFileSync(filePath, "utf-8");
+  const filePath = path4.join(dir, files[0]);
+  const content = fs3.readFileSync(filePath, "utf-8");
   try {
     const json = JSON.parse(content);
     if (!json.events) return null;
