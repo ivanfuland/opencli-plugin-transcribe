@@ -312,6 +312,41 @@ function langMap(code) {
   return LANG_MAP[code] ?? code;
 }
 
+// _pick-subtitle-lang.js
+var LANG_PREFERENCE = ["zh-Hans", "zh-Hant", "zh", "en", "ja", "ko"];
+function pickSubtitleLang(manualLangs, autoLangs, userLang, videoLang) {
+  if (userLang) {
+    const exactManual = manualLangs.find((l) => l === userLang);
+    if (exactManual) return { lang: exactManual, isAuto: false };
+    const prefixManual = manualLangs.find((l) => l.startsWith(userLang) || userLang.startsWith(l));
+    if (prefixManual) return { lang: prefixManual, isAuto: false };
+    const exactAuto = autoLangs.find((l) => l === userLang);
+    if (exactAuto) return { lang: exactAuto, isAuto: true };
+    const prefixAuto = autoLangs.find((l) => l.startsWith(userLang) || userLang.startsWith(l));
+    if (prefixAuto) return { lang: prefixAuto, isAuto: true };
+  }
+  const pref = videoLang ? [videoLang, ...LANG_PREFERENCE.filter((l) => l !== videoLang)] : LANG_PREFERENCE;
+  for (const p of pref) {
+    const manual = manualLangs.find((l) => l === p);
+    if (manual) return { lang: manual, isAuto: false };
+  }
+  for (const p of pref) {
+    const manual = manualLangs.find((l) => l.startsWith(p) || p.startsWith(l));
+    if (manual) return { lang: manual, isAuto: false };
+  }
+  for (const p of pref) {
+    const auto = autoLangs.find((l) => l === p);
+    if (auto) return { lang: auto, isAuto: true };
+  }
+  for (const p of pref) {
+    const auto = autoLangs.find((l) => l.startsWith(p) || p.startsWith(l));
+    if (auto) return { lang: auto, isAuto: true };
+  }
+  if (manualLangs.length > 0) return { lang: manualLangs[0], isAuto: false };
+  if (autoLangs.length > 0) return { lang: autoLangs[0], isAuto: true };
+  return null;
+}
+
 // youtube-transcribe.ts
 cli({
   site: "youtube",
@@ -406,15 +441,15 @@ function parseVideoId(input) {
   }
   return input;
 }
-var LANG_PREFERENCE = ["zh-Hans", "zh-Hant", "zh", "en", "ja", "ko"];
 async function downloadSubtitlesViaYtDlp(videoUrl, outputDir, lang) {
   console.error("[transcribe] Fetching available subtitle languages...");
   const info = await getSubtitleInfo(videoUrl);
   const manualLangs = Object.keys(info.subtitles);
   const autoLangs = Object.keys(info.automatic_captions);
-  console.error(`[transcribe] Manual: [${manualLangs.join(", ")}], Auto: ${autoLangs.length} languages`);
+  const videoLang = info.language ? langMap(info.language) : void 0;
+  console.error(`[transcribe] Manual: [${manualLangs.join(", ")}], Auto: ${autoLangs.length} languages, Original: ${videoLang ?? "unknown"}`);
   if (manualLangs.length === 0 && autoLangs.length === 0) return null;
-  const picked = pickSubtitleLang(manualLangs, autoLangs, lang);
+  const picked = pickSubtitleLang(manualLangs, autoLangs, lang, videoLang);
   if (!picked) return null;
   console.error(`[transcribe] Selected: ${picked.lang} (${picked.isAuto ? "auto" : "manual"})`);
   const outputTemplate = path4.join(outputDir, "sub");
@@ -422,37 +457,6 @@ async function downloadSubtitlesViaYtDlp(videoUrl, outputDir, lang) {
   const segments = findAndParseSubFile(outputDir);
   if (!segments) return null;
   return { segments, isAuto: picked.isAuto };
-}
-function pickSubtitleLang(manualLangs, autoLangs, userLang) {
-  if (userLang) {
-    const exactManual = manualLangs.find((l) => l === userLang);
-    if (exactManual) return { lang: exactManual, isAuto: false };
-    const prefixManual = manualLangs.find((l) => l.startsWith(userLang) || userLang.startsWith(l));
-    if (prefixManual) return { lang: prefixManual, isAuto: false };
-    const exactAuto = autoLangs.find((l) => l === userLang);
-    if (exactAuto) return { lang: exactAuto, isAuto: true };
-    const prefixAuto = autoLangs.find((l) => l.startsWith(userLang) || userLang.startsWith(l));
-    if (prefixAuto) return { lang: prefixAuto, isAuto: true };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const manual = manualLangs.find((l) => l === pref);
-    if (manual) return { lang: manual, isAuto: false };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const manual = manualLangs.find((l) => l.startsWith(pref) || pref.startsWith(l));
-    if (manual) return { lang: manual, isAuto: false };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const auto = autoLangs.find((l) => l === pref);
-    if (auto) return { lang: auto, isAuto: true };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const auto = autoLangs.find((l) => l.startsWith(pref) || pref.startsWith(l));
-    if (auto) return { lang: auto, isAuto: true };
-  }
-  if (manualLangs.length > 0) return { lang: manualLangs[0], isAuto: false };
-  if (autoLangs.length > 0) return { lang: autoLangs[0], isAuto: true };
-  return null;
 }
 function getSubtitleInfo(videoUrl) {
   return new Promise((resolve, reject) => {
@@ -485,7 +489,8 @@ function getSubtitleInfo(videoUrl) {
           const json = JSON.parse(stdout);
           resolve({
             subtitles: json.subtitles || {},
-            automatic_captions: json.automatic_captions || {}
+            automatic_captions: json.automatic_captions || {},
+            language: typeof json.language === "string" ? json.language : null
           });
         } catch {
           reject(new TranscribeError("Failed to parse yt-dlp JSON output"));

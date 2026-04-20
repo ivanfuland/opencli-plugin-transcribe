@@ -15,6 +15,7 @@ import { transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
+import { pickSubtitleLang } from './_pick-subtitle-lang.js';
 
 cli({
   site: 'youtube',
@@ -134,12 +135,10 @@ interface SubtitleResult {
   isAuto: boolean;
 }
 
-/** Language preference order when user doesn't specify a language */
-const LANG_PREFERENCE = ['zh-Hans', 'zh-Hant', 'zh', 'en', 'ja', 'ko'];
-
 interface SubtitleInfo {
   subtitles: Record<string, unknown[]>;
   automatic_captions: Record<string, unknown[]>;
+  language: string | null;
 }
 
 /**
@@ -156,12 +155,13 @@ async function downloadSubtitlesViaYtDlp(
   const info = await getSubtitleInfo(videoUrl);
   const manualLangs = Object.keys(info.subtitles);
   const autoLangs = Object.keys(info.automatic_captions);
-  console.error(`[transcribe] Manual: [${manualLangs.join(', ')}], Auto: ${autoLangs.length} languages`);
+  const videoLang = info.language ? langMap(info.language) : undefined;
+  console.error(`[transcribe] Manual: [${manualLangs.join(', ')}], Auto: ${autoLangs.length} languages, Original: ${videoLang ?? 'unknown'}`);
 
   if (manualLangs.length === 0 && autoLangs.length === 0) return null;
 
-  // Step 2: Pick the best subtitle language
-  const picked = pickSubtitleLang(manualLangs, autoLangs, lang);
+  // Step 2: Pick the best subtitle language (videoLang steers auto-select toward original ASR, not translations)
+  const picked = pickSubtitleLang(manualLangs, autoLangs, lang, videoLang);
   if (!picked) return null;
 
   console.error(`[transcribe] Selected: ${picked.lang} (${picked.isAuto ? 'auto' : 'manual'})`);
@@ -173,54 +173,6 @@ async function downloadSubtitlesViaYtDlp(
   if (!segments) return null;
 
   return { segments, isAuto: picked.isAuto };
-}
-
-/**
- * Pick the best subtitle language based on availability and preference.
- * Priority: user-specified lang > manual subs by preference > auto subs by preference > any manual > any auto
- */
-function pickSubtitleLang(
-  manualLangs: string[],
-  autoLangs: string[],
-  userLang: string,
-): { lang: string; isAuto: boolean } | null {
-  // If user specified a language, look for exact match, then prefix match
-  if (userLang) {
-    const exactManual = manualLangs.find(l => l === userLang);
-    if (exactManual) return { lang: exactManual, isAuto: false };
-
-    const prefixManual = manualLangs.find(l => l.startsWith(userLang) || userLang.startsWith(l));
-    if (prefixManual) return { lang: prefixManual, isAuto: false };
-
-    const exactAuto = autoLangs.find(l => l === userLang);
-    if (exactAuto) return { lang: exactAuto, isAuto: true };
-
-    const prefixAuto = autoLangs.find(l => l.startsWith(userLang) || userLang.startsWith(l));
-    if (prefixAuto) return { lang: prefixAuto, isAuto: true };
-  }
-
-  // No user lang or no match — use preference order
-  for (const pref of LANG_PREFERENCE) {
-    const manual = manualLangs.find(l => l === pref);
-    if (manual) return { lang: manual, isAuto: false };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const manual = manualLangs.find(l => l.startsWith(pref) || pref.startsWith(l));
-    if (manual) return { lang: manual, isAuto: false };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const auto = autoLangs.find(l => l === pref);
-    if (auto) return { lang: auto, isAuto: true };
-  }
-  for (const pref of LANG_PREFERENCE) {
-    const auto = autoLangs.find(l => l.startsWith(pref) || pref.startsWith(l));
-    if (auto) return { lang: auto, isAuto: true };
-  }
-
-  // Fallback: first available manual, then first auto
-  if (manualLangs.length > 0) return { lang: manualLangs[0], isAuto: false };
-  if (autoLangs.length > 0) return { lang: autoLangs[0], isAuto: true };
-  return null;
 }
 
 /** Get subtitle/caption metadata via yt-dlp --dump-json */
@@ -252,6 +204,7 @@ function getSubtitleInfo(videoUrl: string): Promise<SubtitleInfo> {
           resolve({
             subtitles: json.subtitles || {},
             automatic_captions: json.automatic_captions || {},
+            language: typeof json.language === 'string' ? json.language : null,
           });
         } catch {
           reject(new TranscribeError('Failed to parse yt-dlp JSON output'));
