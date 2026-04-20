@@ -127,7 +127,7 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 | 参数 | 必填 | 类型 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `url` | 是 | string（位置参数） | — | 视频 URL 或 ID |
-| `--lang` | 否 | string | 自动选择 | 字幕语言代码，不可用时 fallback 到第一轨并输出警告 |
+| `--lang` | 否 | string | 自动选择 | 字幕语言代码。未指定时按以下优先级自动选择：**视频原语言**（yt-dlp `info.language`）→ 硬编码偏好 `zh-Hans / zh-Hant / zh / en / ja / ko` → 首个可用字幕。YouTube 的 `automatic_captions` 包含原语言 ASR + 150+ 翻译版本，传入 `info.language` 可保证默认拿到原语言 ASR 而非翻译版 |
 | `--mode` | 否 | `raw` / `grouped` | `raw` | `raw`：逐句输出，每句带精确起止时间戳；`grouped`：按约 30 秒合并成段落 |
 | `--force-asr` | 否 | boolean | `false` | 跳过平台字幕，直接使用 Whisper 转录 |
 | `--keep-audio` | 否 | boolean | `false` | 保留临时 WAV 音频文件并输出路径（仅 Whisper fallback 时有效） |
