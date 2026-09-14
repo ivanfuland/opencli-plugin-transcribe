@@ -23,6 +23,7 @@ cli({
   description: 'Transcribe a YouTube video (subtitles first, Whisper large-v3 fallback)',
   domain: 'www.youtube.com',
   strategy: Strategy.COOKIE,
+  access: 'read',
   timeoutSeconds: 25200, // 7 hours — Whisper large-v3 on long videos can take a while
   args: [
     { name: 'url', required: true, positional: true, help: 'YouTube video URL or video ID' },

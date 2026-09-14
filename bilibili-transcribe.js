@@ -1,12 +1,290 @@
+// bilibili-transcribe.ts
 import { createHash } from "node:crypto";
 import { cli, Strategy } from "@jackwener/opencli/registry";
-import { TranscribeError } from "./_errors.js";
-import { downloadAudio } from "./_download.js";
-import { transcribeWithWhisper } from "./_whisper.js";
-import { formatRaw, formatGrouped } from "./_format.js";
-import { createTempDir, cleanupTempDir, registerCleanupHook } from "./_temp.js";
-import { langMap } from "./_lang-map.js";
-const MIXIN_KEY_ENC_TAB = [
+
+// _errors.js
+var TranscribeError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TranscribeError";
+  }
+};
+
+// _download.js
+import { execFile as execFile2 } from "node:child_process";
+import * as path from "node:path";
+
+// _deps.js
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+async function checkDep(name, installHint) {
+  try {
+    await execFileAsync("which", [name]);
+  } catch {
+    throw new TranscribeError(`${name} not found. ${installHint}`);
+  }
+}
+async function checkYtDlp() {
+  await checkDep("yt-dlp", "Install: pip install yt-dlp  or  brew install yt-dlp");
+}
+async function checkWhisper() {
+  await checkDep("whisper", "Install: pip install openai-whisper");
+}
+async function checkFfmpeg() {
+  await checkDep("ffmpeg", "Install: brew install ffmpeg  or  apt install ffmpeg");
+}
+
+// _download.js
+var DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1e3;
+async function downloadAudio(url, outputDir, cookiesBrowser = "chrome") {
+  await checkYtDlp();
+  await checkFfmpeg();
+  const outputPath = path.join(outputDir, "audio.wav");
+  await new Promise((resolve, reject) => {
+    let stderr = "";
+    const proc = execFile2(
+      "yt-dlp",
+      [
+        "-x",
+        "--audio-format",
+        "wav",
+        "-o",
+        outputPath,
+        "--cookies-from-browser",
+        cookiesBrowser,
+        "--remote-components",
+        "ejs:github",
+        "--no-playlist",
+        url
+      ],
+      {
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          // Ensure yt-dlp picks GNOME keyring even when DESKTOP_SESSION is unset
+          // (e.g. when launched outside a full GUI session)
+          DESKTOP_SESSION: process.env.DESKTOP_SESSION || "gnome"
+        }
+      },
+      (err) => {
+        if (err) {
+          reject(new TranscribeError(
+            `yt-dlp download failed: ${stderr.trim() || err.message}`
+          ));
+        } else {
+          resolve();
+        }
+      }
+    );
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
+    });
+  });
+  return outputPath;
+}
+
+// _whisper.js
+import { execFile as execFile3 } from "node:child_process";
+import * as fs from "node:fs";
+import * as path2 from "node:path";
+var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
+async function transcribeWithWhisper(audioPath, outputDir, lang) {
+  await checkWhisper();
+  const stem = path2.basename(audioPath, path2.extname(audioPath));
+  const jsonOutput = path2.join(outputDir, `${stem}.json`);
+  const baseArgs = [
+    audioPath,
+    "--model",
+    "large-v3",
+    "--output_format",
+    "json",
+    "--output_dir",
+    outputDir
+  ];
+  if (lang) baseArgs.push("--language", lang);
+  try {
+    await runWhisper([...baseArgs, "--device", "cuda"]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/cuda|CUDA|RuntimeError/i.test(msg)) {
+      console.error(`Warning: CUDA failed (${msg.split("\n")[0]}). Retrying on CPU...`);
+      await runWhisper([...baseArgs, "--device", "cpu"]);
+    } else {
+      throw err;
+    }
+  }
+  let parsed;
+  try {
+    const raw = fs.readFileSync(jsonOutput, "utf-8");
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new TranscribeError(
+      `Failed to read Whisper output at ${jsonOutput}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const segments = parsed.segments ?? [];
+  return segments.map((s) => ({
+    start: Number(s.start),
+    end: Number(s.end),
+    text: String(s.text).trim()
+  }));
+}
+async function runWhisper(args) {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    const startTime = Date.now();
+    const heartbeat = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startTime) / 1e3);
+      process.stderr.write(`[whisper] transcribing... ${elapsed}s elapsed
+`);
+    }, 3e4);
+    const proc = execFile3("whisper", args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
+      clearInterval(heartbeat);
+      if (err) {
+        reject(new TranscribeError(
+          `Whisper transcription failed: ${stderr.trim() || err.message}`
+        ));
+      } else {
+        resolve();
+      }
+    });
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
+    });
+  });
+}
+
+// _format.js
+var SENTENCE_END = /[.!?\u3002\uFF01\uFF1F\uFF0E]["'\u2019\u201D)]*\s*$/;
+var MAX_GROUP_SPAN_SECONDS = 30;
+var TRANSCRIPT_GROUP_GAP_SECONDS = 20;
+function formatRaw(segments, source) {
+  return segments.map((seg, i) => ({
+    index: i + 1,
+    start: Number(seg.start).toFixed(2) + "s",
+    end: Number(seg.end).toFixed(2) + "s",
+    text: seg.text,
+    source
+  }));
+}
+function formatGrouped(segments, source) {
+  if (segments.length === 0) return [];
+  const groups = groupBySentence(segments);
+  return groups.map((g) => ({
+    timestamp: fmtTime(g.start),
+    text: g.text,
+    source
+  }));
+}
+function groupBySentence(segments) {
+  const groups = [];
+  let buffer = "";
+  let bufferStart = 0;
+  let lastStart = 0;
+  const flush = () => {
+    if (buffer.trim()) {
+      groups.push({ start: bufferStart, text: buffer.trim() });
+      buffer = "";
+    }
+  };
+  for (const seg of segments) {
+    if (buffer && seg.start - lastStart > TRANSCRIPT_GROUP_GAP_SECONDS) {
+      flush();
+    }
+    if (buffer && seg.start - bufferStart > MAX_GROUP_SPAN_SECONDS) {
+      flush();
+    }
+    if (!buffer) bufferStart = seg.start;
+    buffer += (buffer ? " " : "") + seg.text;
+    lastStart = seg.start;
+    if (SENTENCE_END.test(seg.text)) flush();
+  }
+  flush();
+  return groups;
+}
+function fmtTime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor(sec % 3600 / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// _temp.js
+import * as fs2 from "node:fs";
+import * as os from "node:os";
+import * as path3 from "node:path";
+function createTempDir() {
+  return fs2.mkdtempSync(path3.join(os.tmpdir(), "opencli-transcribe-"));
+}
+function cleanupTempDir(dir, keepAudio) {
+  if (keepAudio) {
+    console.error(`Audio kept at: ${dir}`);
+    return;
+  }
+  try {
+    fs2.rmSync(dir, { recursive: true, force: true });
+  } catch {
+  }
+}
+function registerCleanupHook(dir) {
+  const handler = () => {
+    try {
+      fs2.rmSync(dir, { recursive: true, force: true });
+    } catch {
+    }
+  };
+  process.once("SIGINT", handler);
+  process.once("SIGTERM", handler);
+  return () => {
+    process.off("SIGINT", handler);
+    process.off("SIGTERM", handler);
+  };
+}
+
+// _lang-map.js
+var LANG_MAP = {
+  "zh-Hans": "zh",
+  "zh-Hant": "zh",
+  "zh-CN": "zh",
+  "zh-TW": "zh",
+  "zh-HK": "zh",
+  "en-US": "en",
+  "en-GB": "en",
+  "en-AU": "en",
+  "ja-JP": "ja",
+  "ko-KR": "ko",
+  "fr-FR": "fr",
+  "de-DE": "de",
+  "es-ES": "es",
+  "es-MX": "es",
+  "pt-BR": "pt",
+  "pt-PT": "pt",
+  "ru-RU": "ru",
+  "ar-SA": "ar",
+  "hi-IN": "hi",
+  "it-IT": "it",
+  "nl-NL": "nl",
+  "pl-PL": "pl",
+  "tr-TR": "tr",
+  "vi-VN": "vi",
+  "th-TH": "th",
+  "id-ID": "id",
+  "ms-MY": "ms"
+};
+function langMap(code) {
+  return LANG_MAP[code] ?? code;
+}
+
+// bilibili-transcribe.ts
+var MIXIN_KEY_ENC_TAB = [
   46,
   47,
   18,
@@ -78,6 +356,7 @@ cli({
   description: "\u8F6C\u5F55 Bilibili \u89C6\u9891\uFF08\u5B57\u5E55\u4F18\u5148\uFF0C\u65E0\u5B57\u5E55\u65F6 Whisper large-v3 \u515C\u5E95\uFF09",
   domain: "www.bilibili.com",
   strategy: Strategy.COOKIE,
+  access: "read",
   timeoutSeconds: 25200,
   // 7 hours — Whisper large-v3 on long videos can take a while
   args: [
