@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 var vitest_config_default = defineConfig({
   resolve: {
     alias: {
-      "@jackwener/opencli/registry": "/usr/lib/node_modules/@jackwener/opencli/dist/registry-api.js"
+      "@jackwener/opencli/registry": "/usr/lib/node_modules/@jackwener/opencli/dist/src/registry-api.js"
     }
   },
   test: {
