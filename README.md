@@ -152,13 +152,12 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 `source` 字段取值：
 - `manual_caption` — 平台人工字幕
 - `auto_caption` — 平台自动生成字幕（YouTube ASR / Bilibili AI 字幕）
-- `whisper_large_v3` — 本地 Whisper 转录
+- `whisper_large_v3` — 本地 Whisper 转录。为保持输出兼容，这个值不随 `TRANSCRIBE_WHISPER_MODEL` 变化；实际模型看 stderr 的 `[whisper] model:` 行
 
 ## 已知限制
 
-- Whisper `large-v3` 需要约 10GB VRAM，长视频（>1h）单次转录可能超过 30 分钟
+- Whisper `large-v3` 需要约 10GB VRAM，长视频（>1h）单次转录可能超过 30 分钟；显存不够时用 `TRANSCRIBE_WHISPER_MODEL` 换小模型
 - 仅支持 YouTube 和 Bilibili 两个平台
-- Whisper 模型固定为 `large-v3`，不支持切换
 - 不支持远程 ASR API，仅本地推理
 - yt-dlp / WBI API 可能随平台更新而失效，届时请更新插件
 
