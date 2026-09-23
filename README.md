@@ -41,6 +41,8 @@ opencli list | grep transcribe
 
 使用 `--force-asr` 可跳过步骤 1-2，直接使用 Whisper 转录。
 
+使用 `--subs-only` 则只取字幕：取不到字幕时（包括字幕获取出错）不下载音频、不跑 Whisper，命令以非零码退出，错误消息以 `TRANSCRIBE_NO_SUBTITLES` 开头。调用方可以在输出里匹配这个标记，把「没有字幕」与其他失败区分开，再自行决定是否另行转录。`--subs-only` 与 `--force-asr` 不能同时使用。
+
 ### YouTube 特有行为
 
 - 浏览器导航到视频页面，从 `ytInitialPlayerResponse` 提取音频流 URL（itag 140, m4a 128kbps）
@@ -160,6 +162,7 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 | `--lang` | 否 | string | 自动选择 | 字幕语言代码。未指定时按以下优先级自动选择：**视频原语言**（yt-dlp `info.language`）→ 硬编码偏好 `zh-Hans / zh-Hant / zh / en / ja / ko` → 首个可用字幕。YouTube 的 `automatic_captions` 包含原语言 ASR + 150+ 翻译版本，传入 `info.language` 可保证默认拿到原语言 ASR 而非翻译版 |
 | `--mode` | 否 | `raw` / `grouped` | `raw` | `raw`：逐句输出，每句带精确起止时间戳；`grouped`：按约 30 秒合并成段落 |
 | `--force-asr` | 否 | boolean | `false` | 跳过平台字幕，直接使用 Whisper 转录 |
+| `--subs-only` | 否 | boolean | `false` | 只取字幕；没有字幕时以 `TRANSCRIBE_NO_SUBTITLES` 失败，不回落到 Whisper。不能与 `--force-asr` 同用 |
 | `--keep-audio` | 否 | boolean | `false` | 保留临时 WAV 音频文件并输出路径（仅 Whisper fallback 时有效） |
 
 ## 输出格式

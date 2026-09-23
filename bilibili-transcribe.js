@@ -9,6 +9,13 @@ var TranscribeError = class extends Error {
     this.name = "TranscribeError";
   }
 };
+var NO_SUBTITLES_MARKER = "TRANSCRIBE_NO_SUBTITLES";
+function assertAsrFlags(forceAsr, subsOnly) {
+  if (forceAsr && subsOnly) throw new TranscribeError("--force-asr and --subs-only cannot be used together");
+}
+function stopIfSubsOnly(subsOnly) {
+  if (subsOnly) throw new TranscribeError(`${NO_SUBTITLES_MARKER}: no subtitles found; --subs-only skips the Whisper fallback`);
+}
 
 // _download.js
 import { execFile as execFile2 } from "node:child_process";
@@ -404,6 +411,7 @@ cli({
     { name: "lang", required: false, help: "\u5B57\u5E55\u8BED\u8A00\u4EE3\u7801 (\u5982 zh-CN, en-US)" },
     { name: "mode", required: false, default: "raw", choices: ["raw", "grouped"], help: "\u8F93\u51FA\u6A21\u5F0F\uFF1Araw\uFF08\u9010\u53E5\u5E26\u65F6\u95F4\u6233\uFF09\u6216 grouped\uFF08\u5408\u5E76\u6BB5\u843D\uFF09" },
     { name: "force-asr", required: false, type: "boolean", default: false, help: "\u8DF3\u8FC7\u5B57\u5E55\uFF0C\u76F4\u63A5\u4F7F\u7528 Whisper" },
+    { name: "subs-only", required: false, type: "boolean", default: false, help: "\u53EA\u53D6\u5B57\u5E55\uFF1B\u6CA1\u6709\u5B57\u5E55\u65F6\u4EE5 TRANSCRIBE_NO_SUBTITLES \u5931\u8D25\uFF0C\u4E0D\u56DE\u843D\u5230 Whisper" },
     { name: "keep-audio", required: false, type: "boolean", default: false, help: "\u4FDD\u7559\u4E34\u65F6\u97F3\u9891\u6587\u4EF6" }
   ],
   func: async (page, kwargs) => {
@@ -412,6 +420,8 @@ cli({
     const mode = String(kwargs.mode || "raw");
     const forceAsr = Boolean(kwargs["force-asr"]);
     const keepAudio = Boolean(kwargs["keep-audio"]);
+    const subsOnly = Boolean(kwargs["subs-only"]);
+    assertAsrFlags(forceAsr, subsOnly);
     const videoUrl = normalizeBilibiliUrl(inputUrl);
     const whisperLang = lang ? langMap(lang) : void 0;
     if (!forceAsr && page) {
@@ -426,6 +436,7 @@ cli({
         console.error(`Warning: subtitle fetch failed (${msg}), falling back to Whisper`);
       }
     }
+    stopIfSubsOnly(subsOnly);
     console.error("[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper large-v3 ASR...");
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);

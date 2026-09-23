@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { TranscribeError } from './_errors.js';
+import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio, downloadAudioFromUrl } from './_download.js';
 import { transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
@@ -30,6 +30,7 @@ cli({
     { name: 'lang', required: false, help: 'Language code (e.g. en, zh-Hans). Omit to auto-select' },
     { name: 'mode', required: false, default: 'raw', choices: ['raw', 'grouped'], help: 'Output mode: raw (per-segment with timestamps) or grouped (merged paragraphs)' },
     { name: 'force-asr', required: false, type: 'boolean', default: false, help: 'Skip subtitles and always use Whisper' },
+    { name: 'subs-only', required: false, type: 'boolean', default: false, help: 'Only fetch subtitles; fail with TRANSCRIBE_NO_SUBTITLES instead of falling back to Whisper' },
     { name: 'keep-audio', required: false, type: 'boolean', default: false, help: 'Keep temporary audio file after transcription' },
   ],
   func: async (page, kwargs) => {
@@ -38,6 +39,8 @@ cli({
     const mode = String(kwargs.mode || 'raw');
     const forceAsr = Boolean(kwargs['force-asr']);
     const keepAudio = Boolean(kwargs['keep-audio']);
+    const subsOnly = Boolean(kwargs['subs-only']);
+    assertAsrFlags(forceAsr, subsOnly);
 
     const videoId = parseVideoId(url);
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -87,6 +90,7 @@ cli({
     }
 
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
+    stopIfSubsOnly(subsOnly);
     console.error('[transcribe] No subtitles found. Falling back to Whisper large-v3 ASR...');
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);

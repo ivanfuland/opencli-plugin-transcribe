@@ -11,6 +11,13 @@ var TranscribeError = class extends Error {
     this.name = "TranscribeError";
   }
 };
+var NO_SUBTITLES_MARKER = "TRANSCRIBE_NO_SUBTITLES";
+function assertAsrFlags(forceAsr, subsOnly) {
+  if (forceAsr && subsOnly) throw new TranscribeError("--force-asr and --subs-only cannot be used together");
+}
+function stopIfSubsOnly(subsOnly) {
+  if (subsOnly) throw new TranscribeError(`${NO_SUBTITLES_MARKER}: no subtitles found; --subs-only skips the Whisper fallback`);
+}
 
 // _download.js
 import { execFile as execFile2 } from "node:child_process";
@@ -402,6 +409,7 @@ cli({
     { name: "lang", required: false, help: "Language code (e.g. en, zh-Hans). Omit to auto-select" },
     { name: "mode", required: false, default: "raw", choices: ["raw", "grouped"], help: "Output mode: raw (per-segment with timestamps) or grouped (merged paragraphs)" },
     { name: "force-asr", required: false, type: "boolean", default: false, help: "Skip subtitles and always use Whisper" },
+    { name: "subs-only", required: false, type: "boolean", default: false, help: "Only fetch subtitles; fail with TRANSCRIBE_NO_SUBTITLES instead of falling back to Whisper" },
     { name: "keep-audio", required: false, type: "boolean", default: false, help: "Keep temporary audio file after transcription" }
   ],
   func: async (page, kwargs) => {
@@ -410,6 +418,8 @@ cli({
     const mode = String(kwargs.mode || "raw");
     const forceAsr = Boolean(kwargs["force-asr"]);
     const keepAudio = Boolean(kwargs["keep-audio"]);
+    const subsOnly = Boolean(kwargs["subs-only"]);
+    assertAsrFlags(forceAsr, subsOnly);
     const videoId = parseVideoId(url);
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const whisperLang = lang ? langMap(lang) : void 0;
@@ -448,6 +458,7 @@ cli({
         console.error(`[transcribe] Subtitle download failed: ${msg}`);
       }
     }
+    stopIfSubsOnly(subsOnly);
     console.error("[transcribe] No subtitles found. Falling back to Whisper large-v3 ASR...");
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
