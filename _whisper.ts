@@ -1,6 +1,8 @@
 /**
  * Whisper transcription via CLI subprocess for opencli-plugin-transcribe.
- * Uses whisper large-v3 model. GPU fallback: CUDA → CPU on failure.
+ * Uses whisper large-v3 by default; set TRANSCRIBE_WHISPER_MODEL to pick another
+ * model (e.g. turbo, small) on GPUs that cannot hold large-v3.
+ * GPU fallback: CUDA → CPU on failure.
  */
 
 import { execFile } from 'node:child_process';
@@ -10,6 +12,14 @@ import { checkWhisper } from './_deps.js';
 import { TranscribeError } from './_errors.js';
 
 const WHISPER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+export const DEFAULT_WHISPER_MODEL = 'large-v3';
+
+/** Model name passed to `whisper --model`: TRANSCRIBE_WHISPER_MODEL if set and non-empty, else large-v3. */
+export function resolveWhisperModel(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
+  return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
+}
 
 export interface WhisperSegment {
   start: number;
@@ -33,9 +43,12 @@ export async function transcribeWithWhisper(
   const stem = path.basename(audioPath, path.extname(audioPath));
   const jsonOutput = path.join(outputDir, `${stem}.json`);
 
+  const model = resolveWhisperModel();
+  process.stderr.write(`[whisper] model: ${model}\n`);
+
   const baseArgs = [
     audioPath,
-    '--model', 'large-v3',
+    '--model', model,
     '--output_format', 'json',
     '--output_dir', outputDir,
   ];

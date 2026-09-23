@@ -4,14 +4,22 @@ import * as path from "node:path";
 import { checkWhisper } from "./_deps.js";
 import { TranscribeError } from "./_errors.js";
 const WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
+const DEFAULT_WHISPER_MODEL = "large-v3";
+function resolveWhisperModel(env = process.env) {
+  const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
+  return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
+}
 async function transcribeWithWhisper(audioPath, outputDir, lang) {
   await checkWhisper();
   const stem = path.basename(audioPath, path.extname(audioPath));
   const jsonOutput = path.join(outputDir, `${stem}.json`);
+  const model = resolveWhisperModel();
+  process.stderr.write(`[whisper] model: ${model}
+`);
   const baseArgs = [
     audioPath,
     "--model",
-    "large-v3",
+    model,
     "--output_format",
     "json",
     "--output_dir",
@@ -72,5 +80,7 @@ async function runWhisper(args) {
   });
 }
 export {
+  DEFAULT_WHISPER_MODEL,
+  resolveWhisperModel,
   transcribeWithWhisper
 };
