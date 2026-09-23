@@ -41,7 +41,7 @@ opencli list | grep transcribe
 
 使用 `--force-asr` 可跳过步骤 1-2，直接使用 Whisper 转录。
 
-使用 `--subs-only` 则只取字幕：取不到字幕时（包括字幕获取出错）不下载音频、不跑 Whisper，命令以非零码退出，错误消息以 `TRANSCRIBE_NO_SUBTITLES` 开头。调用方可以在输出里匹配这个标记，把「没有字幕」与其他失败区分开，再自行决定是否另行转录。`--subs-only` 与 `--force-asr` 不能同时使用。
+使用 `--subs-only` 则只取字幕：凡是会回落到 Whisper 的情况（没有字幕，或字幕获取出错），都改为不下载音频、不跑 Whisper，命令以退出码 1 结束，错误消息以 `TRANSCRIBE_NO_SUBTITLES` 开头，由 opencli 写到 stderr。调用方在 stderr 里匹配这个标记，就能把「该转录了」与参数错误等其他失败区分开，再自行决定在哪里转录。`--subs-only` 下 YouTube 也不再打开视频页去取音频流地址。`--subs-only` 与 `--force-asr` 不能同时使用。
 
 ### YouTube 特有行为
 

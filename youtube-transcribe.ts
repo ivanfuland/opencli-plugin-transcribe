@@ -49,8 +49,8 @@ cli({
 
     // ── Step 1: Try subtitles via yt-dlp (unless --force-asr) ───────────────
     if (!forceAsr) {
-      // First, extract audio URL from page if browser is available
-      if (page) {
+      // First, extract audio URL from page if browser is available (unused with --subs-only, which never downloads audio)
+      if (page && !subsOnly) {
         try {
           await page.goto(videoUrl, { waitUntil: 'domcontentloaded' });
           const audioData = await page.evaluate(`

@@ -425,7 +425,7 @@ cli({
     const whisperLang = lang ? langMap(lang) : void 0;
     let ytAudioUrl = null;
     if (!forceAsr) {
-      if (page) {
+      if (page && !subsOnly) {
         try {
           await page.goto(videoUrl, { waitUntil: "domcontentloaded" });
           const audioData = await page.evaluate(`
