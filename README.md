@@ -1,6 +1,6 @@
 # opencli-plugin-transcribe
 
-YouTube / Bilibili 视频转录插件。优先使用平台原生字幕，无字幕时自动 fallback 到本地 Whisper `large-v3` 模型转录。
+YouTube / Bilibili 视频转录插件。优先使用平台原生字幕，无字幕时按配置使用本地或远端 Whisper 转录。
 
 ## 前置依赖
 
@@ -9,10 +9,10 @@ YouTube / Bilibili 视频转录插件。优先使用平台原生字幕，无字�
 | 工具 | 用途 | 安装命令 |
 |------|------|----------|
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | 下载字幕和音频 | `pip install yt-dlp` 或 `brew install yt-dlp` |
-| [openai-whisper](https://github.com/openai/whisper) | 本地 ASR 转录（GPU fallback） | `pip install openai-whisper` |
+| [openai-whisper](https://github.com/openai/whisper) | 默认本地后端需要；远端后端不需要 | `pip install openai-whisper` |
 | [ffmpeg](https://ffmpeg.org) | 音频格式转换 | `brew install ffmpeg` 或 `apt install ffmpeg` |
 
-**硬件要求（Whisper large-v3）：** 约 10GB VRAM（GPU）或 RAM（CPU）。首次运行会自动下载模型（约 3GB）。显存不够时，用环境变量 `TRANSCRIBE_WHISPER_MODEL` 换更小的模型，见下文「Whisper 转录」。
+**本地硬件要求（Whisper large-v3）：** 约 10GB VRAM（GPU）或 RAM（CPU）。首次运行会自动下载模型（约 3GB）。远端后端不在本机加载模型；显存不够时可用远端后端或在本地改用小模型。
 
 ## 安装
 
@@ -37,7 +37,7 @@ opencli list | grep transcribe
 
 1. **手动字幕** — 通过 yt-dlp `--write-sub --sub-format json3` 下载平台上传的人工字幕
 2. **自动字幕** — 通过 yt-dlp `--write-auto-sub --sub-format json3` 下载平台自动生成的字幕（YouTube ASR / Bilibili AI）
-3. **Whisper ASR** — 本地 Whisper `large-v3` 模型对音频进行语音识别（GPU 优先）
+3. **Whisper ASR** — 按后端配置在本机或远端进行语音识别
 
 使用 `--force-asr` 可跳过步骤 1-2，直接使用 Whisper 转录。
 
@@ -62,12 +62,14 @@ opencli list | grep transcribe
 
 - 模型默认 `large-v3`；设置环境变量 `TRANSCRIBE_WHISPER_MODEL` 可换成任意 Whisper 模型名（如 `turbo`、`medium`、`small`），留空或不设时仍为 `large-v3`。显存装不下 large-v3 的机器（例如 8GB 的笔记本显卡）应设成更小的模型，或改用下面的 faster-whisper 后端，因为 CPU 兜底路径已知有问题
 - 后端默认是 openai-whisper 命令行。设 `TRANSCRIBE_WHISPER_BACKEND=faster-whisper` 改用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)（CTranslate2 推理，支持 int8 量化），由插件自带的 `_faster_whisper.py` 执行，输出格式与 openai-whisper 相同
+- 设 `TRANSCRIBE_WHISPER_BACKEND=remote` 时，插件把下载的 WAV 流式上传到 `TRANSCRIBE_REMOTE_URL` 的 `/api/whisper/jobs`，每 10 秒查询状态；排队和运行期间每 30 秒输出心跳。服务端需返回 `queued`、`running`、`completed` 或 `failed` 状态以及完成时的 `segments`。连接失败或远端任务失败会直接报错，不自动回落到本地 GPU
 - 运行时 stderr 会打印一行 `[whisper] model: <名称>`，faster-whisper 后端会附上后端名和计算精度，便于确认实际配置
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `TRANSCRIBE_WHISPER_MODEL` | `large-v3` | 模型名，两个后端通用 |
-| `TRANSCRIBE_WHISPER_BACKEND` | `openai` | `openai` 或 `faster-whisper` |
+| `TRANSCRIBE_WHISPER_BACKEND` | `openai` | `openai`、`faster-whisper` 或 `remote` |
+| `TRANSCRIBE_REMOTE_URL` | 无 | 仅 remote：提供听写 job 接口的 HTTP(S) 服务根地址，必填 |
 | `TRANSCRIBE_WHISPER_COMPUTE_TYPE` | `int8_float16` | 仅 faster-whisper：CTranslate2 计算精度，如 `float16`、`int8_float16`；回落到 CPU 时自动改用 `int8` |
 | `TRANSCRIBE_FASTER_WHISPER_PYTHON` | `python3` | 仅 faster-whisper：能 `import faster_whisper` 的 Python 解释器，通常指向专用 venv |
 
@@ -93,7 +95,18 @@ export TRANSCRIBE_WHISPER_MODEL=turbo
 
 - 设备选择：优先 CUDA GPU，CUDA 失败时 fallback 到 CPU
 - 每 30 秒输出心跳日志（`[whisper] transcribing... Ns elapsed`），防止调用方误判进程挂起
-- 超时：Whisper 子进程 30 分钟，整体命令超时 7 小时（25200 秒）
+- 两条 `transcribe` 命令都声明 `--timeout`，默认 25200 秒（7 小时）；remote 到期会中止客户端上传或轮询。已有远端 job 可能仍在服务端运行
+- 本地 Whisper 子进程超时 30 分钟
+
+### 远端后端的网络边界
+
+当前内网部署只对受信任的局域网与尾网开放听写接口，没有应用层鉴权。任何能访问该接口的设备都能提交音频、占用 GPU 队列，并在知道 job ID 时查询结果。不要把服务地址额外公开到公网。
+
+```bash
+export TRANSCRIBE_WHISPER_BACKEND=remote
+export TRANSCRIBE_REMOTE_URL=http://gpu-host.internal:4000
+opencli youtube transcribe 'https://www.youtube.com/watch?v=example' --force-asr
+```
 
 ### 临时文件
 
@@ -184,13 +197,13 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 `source` 字段取值：
 - `manual_caption` — 平台人工字幕
 - `auto_caption` — 平台自动生成字幕（YouTube ASR / Bilibili AI 字幕）
-- `whisper_<模型>` — 本地 Whisper 转录，值随 `TRANSCRIBE_WHISPER_MODEL` 变化：模型名转小写、非字母数字换成 `_`，如默认的 `whisper_large_v3`、`turbo` 对应的 `whisper_turbo`
+- `whisper_<模型>` — 本地 Whisper 转录，值随 `TRANSCRIBE_WHISPER_MODEL` 变化：模型名转小写、非字母数字换成 `_`，如默认的 `whisper_large_v3`、`turbo` 对应的 `whisper_turbo`；远端以服务端 job 记录为准
 
 ## 已知限制
 
-- Whisper `large-v3` 需要约 10GB VRAM，长视频（>1h）单次转录可能超过 30 分钟；显存不够时用 `TRANSCRIBE_WHISPER_MODEL` 换小模型
+- 本地 Whisper `large-v3` 需要约 10GB VRAM，长视频（>1h）单次转录可能超过 30 分钟；显存不够时用 `TRANSCRIBE_WHISPER_MODEL` 换小模型或改用远端后端
 - 仅支持 YouTube 和 Bilibili 两个平台
-- 不支持远程 ASR API，仅本地推理
+- 远端后端需要兼容上述 job 接口；插件不提供服务端，也不取消已经提交的远端 job
 - yt-dlp / WBI API 可能随平台更新而失效，届时请更新插件
 
 ## 开发

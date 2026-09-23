@@ -2,8 +2,8 @@
  * Whisper transcription via CLI subprocess for opencli-plugin-transcribe.
  * Uses whisper large-v3 by default; set TRANSCRIBE_WHISPER_MODEL to pick another
  * model (e.g. turbo, small) on GPUs that cannot hold large-v3.
- * Backend: openai-whisper CLI by default; TRANSCRIBE_WHISPER_BACKEND=faster-whisper runs
- * _faster_whisper.py (CTranslate2, int8 quantization) instead.
+ * Backend: openai-whisper CLI by default; faster-whisper runs _faster_whisper.py;
+ * remote sends audio to a Whisper job service without loading a local model.
  * GPU fallback: CUDA → CPU on failure.
  */
 
@@ -15,6 +15,10 @@ import { checkFasterWhisper, checkWhisper } from './_deps.js';
 import { TranscribeError } from './_errors.js';
 
 const WHISPER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const REMOTE_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+const REMOTE_POLL_INTERVAL_MS = 10_000;
+const REMOTE_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_COMMAND_TIMEOUT_SECONDS = 25_200;
 
 export const DEFAULT_WHISPER_MODEL = 'large-v3';
 export const DEFAULT_COMPUTE_TYPE = 'int8_float16';
@@ -23,7 +27,7 @@ export const DEFAULT_FASTER_WHISPER_PYTHON = 'python3';
 // Sits next to this file; the bundled command entries live in the same plugin root.
 const FASTER_WHISPER_SCRIPT = fileURLToPath(new URL('./_faster_whisper.py', import.meta.url));
 
-export type WhisperBackend = 'openai' | 'faster-whisper';
+export type WhisperBackend = 'openai' | 'faster-whisper' | 'remote';
 
 /** Model name passed to `whisper --model`: TRANSCRIBE_WHISPER_MODEL if set and non-empty, else large-v3. */
 export function resolveWhisperModel(env: NodeJS.ProcessEnv = process.env): string {
@@ -45,13 +49,14 @@ export function resolveWhisperSource(env: NodeJS.ProcessEnv = process.env): `whi
   return whisperSource(resolveWhisperModel(env));
 }
 
-/** TRANSCRIBE_WHISPER_BACKEND: unset or blank means openai; anything other than the two names is an error. */
+/** TRANSCRIBE_WHISPER_BACKEND: unset or blank means openai; anything other than the three names is an error. */
 export function resolveWhisperBackend(env: NodeJS.ProcessEnv = process.env): WhisperBackend {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === 'openai') return 'openai';
   if (fromEnv === 'faster-whisper') return 'faster-whisper';
+  if (fromEnv === 'remote') return 'remote';
   throw new TranscribeError(
-    `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai" or "faster-whisper".`
+    `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai", "faster-whisper", or "remote".`
   );
 }
 
@@ -72,6 +77,7 @@ export function buildWhisperCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): WhisperCommand {
   const backend = resolveWhisperBackend(env);
+  if (backend === 'remote') throw new TranscribeError('Remote Whisper does not use a local command');
   const model = resolveWhisperModel(env);
   const args = [audioPath, '--model', model];
   if (backend === 'openai') {
@@ -107,7 +113,10 @@ export async function transcribeWithWhisper(
   audioPath: string,
   outputDir: string,
   lang?: string,
+  timeoutSeconds: number = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+  signal?: AbortSignal,
 ): Promise<WhisperSegment[]> {
+  if (resolveWhisperBackend() === 'remote') return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
   const command = buildWhisperCommand(audioPath, outputDir, lang);
   if (command.backend === 'openai') await checkWhisper();
   else await checkFasterWhisper(command.cmd);
@@ -146,6 +155,123 @@ export async function transcribeWithWhisper(
     end: Number(s.end),
     text: String(s.text).trim(),
   }));
+}
+
+function remoteBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const value = env.TRANSCRIBE_REMOTE_URL?.trim();
+  if (!value) throw new TranscribeError('TRANSCRIBE_REMOTE_URL is required for the remote Whisper backend');
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new TranscribeError('TRANSCRIBE_REMOTE_URL must be an HTTP(S) service URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+    throw new TranscribeError('TRANSCRIBE_REMOTE_URL must be an HTTP(S) service root without credentials or query');
+  }
+  return url.href.replace(/\/$/, '');
+}
+
+async function waitForPoll(signal: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, REMOTE_POLL_INTERVAL_MS);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function remoteRequest(url: string, init: RequestInit & { duplex?: 'half' }, signal: AbortSignal): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    signal: AbortSignal.any([signal, AbortSignal.timeout(REMOTE_REQUEST_TIMEOUT_MS)]),
+    redirect: 'error',
+  });
+}
+
+async function transcribeRemote(audioPath: string, lang: string | undefined, timeoutSeconds: number, upstreamSignal?: AbortSignal): Promise<WhisperSegment[]> {
+  const base = remoteBaseUrl();
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new TranscribeError('Remote Whisper timeout must be a positive number of seconds');
+  }
+  const deadline = new AbortController();
+  const deadlineTimer = setTimeout(() => deadline.abort(new Error('deadline exceeded')), timeoutSeconds * 1000);
+  const requestSignal = upstreamSignal ? AbortSignal.any([deadline.signal, upstreamSignal]) : deadline.signal;
+  const startedAt = Date.now();
+  let jobId = '';
+  let status = 'queued';
+  let upload: fs.ReadStream | undefined;
+  const heartbeat = setInterval(() => {
+    if (jobId) {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      process.stderr.write(`[whisper] remote job ${jobId} ${status} ${elapsed}s\n`);
+    }
+  }, REMOTE_HEARTBEAT_INTERVAL_MS);
+
+  try {
+    const submitUrl = new URL(`${base}/api/whisper/jobs`);
+    if (lang) submitUrl.searchParams.set('lang', lang);
+    upload = fs.createReadStream(audioPath);
+    const submitted = await remoteRequest(submitUrl.href, {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' },
+      body: upload as unknown as BodyInit,
+      duplex: 'half',
+    }, requestSignal);
+    if (submitted.status !== 202) throw new TranscribeError(`Remote Whisper submit failed: HTTP ${submitted.status}`);
+    const created = await submitted.json() as { jobId?: unknown };
+    if (typeof created.jobId !== 'string' || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(created.jobId)) {
+      throw new TranscribeError('Remote Whisper returned an invalid job ID');
+    }
+    jobId = created.jobId;
+
+    for (;;) {
+      const response = await remoteRequest(`${base}/api/whisper/jobs/${jobId}`, { method: 'GET' }, requestSignal);
+      if (response.status === 404) throw new TranscribeError(`Remote Whisper job ${jobId} not found (404)`);
+      if (!response.ok) throw new TranscribeError(`Remote Whisper status failed: HTTP ${response.status}`);
+      const result = await response.json() as {
+        status?: unknown;
+        segments?: Array<{ start: unknown; end: unknown; text: unknown }>;
+        error?: unknown;
+      };
+      if (result.status === 'completed') {
+        if (!Array.isArray(result.segments)) throw new TranscribeError('Remote Whisper result has no segments');
+        return result.segments.map(segment => {
+          if (
+            !segment || typeof segment.start !== 'number' || !Number.isFinite(segment.start) || segment.start < 0 ||
+            typeof segment.end !== 'number' || !Number.isFinite(segment.end) || segment.end < segment.start ||
+            typeof segment.text !== 'string' || !segment.text.trim()
+          ) {
+            throw new TranscribeError('Remote Whisper returned an invalid segment');
+          }
+          return { start: segment.start, end: segment.end, text: segment.text.trim() };
+        });
+      }
+      if (result.status === 'failed') {
+        const summary = typeof result.error === 'string' ? result.error.slice(0, 200) : 'unknown error';
+        throw new TranscribeError(`Remote Whisper job failed: ${summary}`);
+      }
+      if (result.status !== 'queued' && result.status !== 'running') {
+        throw new TranscribeError('Remote Whisper returned an invalid job status');
+      }
+      status = result.status;
+      await waitForPoll(requestSignal);
+    }
+  } catch (error) {
+    if (error instanceof TranscribeError) throw error;
+    if (requestSignal.aborted) throw new TranscribeError('Remote Whisper command timed out');
+    throw new TranscribeError(`Remote Whisper request failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(deadlineTimer);
+    clearInterval(heartbeat);
+    upload?.destroy();
+  }
 }
 
 async function runWhisper(cmd: string, args: string[]): Promise<void> {

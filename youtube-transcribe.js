@@ -20,7 +20,7 @@ function stopIfSubsOnly(subsOnly) {
 }
 
 // _download.js
-import { execFile as execFile2 } from "node:child_process";
+import { execFile as execFile2, spawn } from "node:child_process";
 import * as path from "node:path";
 
 // _deps.js
@@ -55,14 +55,67 @@ async function checkFfmpeg() {
 
 // _download.js
 var DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1e3;
-async function downloadAudioFromUrl(streamUrl, outputDir) {
+async function runAbortableDownload(cmd, args, signal, env) {
+  if (signal.aborted) throw new TranscribeError(`${cmd} download cancelled`);
+  await new Promise((resolve, reject) => {
+    let stderr = "";
+    let stopped = false;
+    const proc = spawn(cmd, args, {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "ignore", "pipe"],
+      env
+    });
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      try {
+        if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGKILL");
+        else proc.kill("SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          console.error("[transcribe] could not stop the audio download process group");
+        }
+      }
+    };
+    const timeout = setTimeout(stop, DOWNLOAD_TIMEOUT_MS);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", stop);
+    };
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
+    });
+    proc.once("error", (error) => {
+      cleanup();
+      reject(new TranscribeError(`${cmd} download failed: ${error.message}`));
+    });
+    proc.once("close", (code) => {
+      cleanup();
+      if (signal.aborted || stopped || code !== 0) {
+        reject(new TranscribeError(`${cmd} download failed: ${signal.aborted ? "cancelled" : stderr.trim() || `exit ${code}`}`));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+async function downloadAudioFromUrl(streamUrl, outputDir, signal) {
   await checkFfmpeg();
   const outputPath = path.join(outputDir, "audio.wav");
+  const args = ["-y", "-i", streamUrl, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", outputPath];
+  if (signal) {
+    await runAbortableDownload("ffmpeg", args, signal);
+    return outputPath;
+  }
   await new Promise((resolve, reject) => {
     let stderr = "";
     const proc = execFile2(
       "ffmpeg",
-      ["-y", "-i", streamUrl, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", outputPath],
+      args,
       { timeout: DOWNLOAD_TIMEOUT_MS },
       (err) => {
         if (err) {
@@ -82,35 +135,40 @@ async function downloadAudioFromUrl(streamUrl, outputDir) {
   });
   return outputPath;
 }
-async function downloadAudio(url, outputDir, cookiesBrowser = "chrome") {
+async function downloadAudio(url, outputDir, cookiesBrowser = "chrome", signal) {
   await checkYtDlp();
   await checkFfmpeg();
   const outputPath = path.join(outputDir, "audio.wav");
+  const args = [
+    "-x",
+    "--audio-format",
+    "wav",
+    "-o",
+    outputPath,
+    "--cookies-from-browser",
+    cookiesBrowser,
+    "--remote-components",
+    "ejs:github",
+    "--no-playlist",
+    url
+  ];
+  const env = {
+    ...process.env,
+    // yt-dlp needs GNOME keyring even when launched outside a full GUI session.
+    DESKTOP_SESSION: process.env.DESKTOP_SESSION || "gnome"
+  };
+  if (signal) {
+    await runAbortableDownload("yt-dlp", args, signal, env);
+    return outputPath;
+  }
   await new Promise((resolve, reject) => {
     let stderr = "";
     const proc = execFile2(
       "yt-dlp",
-      [
-        "-x",
-        "--audio-format",
-        "wav",
-        "-o",
-        outputPath,
-        "--cookies-from-browser",
-        cookiesBrowser,
-        "--remote-components",
-        "ejs:github",
-        "--no-playlist",
-        url
-      ],
+      args,
       {
         timeout: DOWNLOAD_TIMEOUT_MS,
-        env: {
-          ...process.env,
-          // Ensure yt-dlp picks GNOME keyring even when DESKTOP_SESSION is unset
-          // (e.g. when launched outside a full GUI session)
-          DESKTOP_SESSION: process.env.DESKTOP_SESSION || "gnome"
-        }
+        env
       },
       (err) => {
         if (err) {
@@ -137,6 +195,10 @@ import * as fs from "node:fs";
 import * as path2 from "node:path";
 import { fileURLToPath } from "node:url";
 var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
+var REMOTE_REQUEST_TIMEOUT_MS = 10 * 60 * 1e3;
+var REMOTE_POLL_INTERVAL_MS = 1e4;
+var REMOTE_HEARTBEAT_INTERVAL_MS = 3e4;
+var DEFAULT_COMMAND_TIMEOUT_SECONDS = 25200;
 var DEFAULT_WHISPER_MODEL = "large-v3";
 var DEFAULT_COMPUTE_TYPE = "int8_float16";
 var DEFAULT_FASTER_WHISPER_PYTHON = "python3";
@@ -156,12 +218,14 @@ function resolveWhisperBackend(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
   if (fromEnv === "faster-whisper") return "faster-whisper";
+  if (fromEnv === "remote") return "remote";
   throw new TranscribeError(
-    `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai" or "faster-whisper".`
+    `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai", "faster-whisper", or "remote".`
   );
 }
 function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
   const backend = resolveWhisperBackend(env);
+  if (backend === "remote") throw new TranscribeError("Remote Whisper does not use a local command");
   const model = resolveWhisperModel(env);
   const args = [audioPath, "--model", model];
   if (backend === "openai") {
@@ -180,7 +244,8 @@ function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
     label: `${model} (faster-whisper, ${computeType})`
   };
 }
-async function transcribeWithWhisper(audioPath, outputDir, lang) {
+async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal) {
+  if (resolveWhisperBackend() === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
   const command = buildWhisperCommand(audioPath, outputDir, lang);
   if (command.backend === "openai") await checkWhisper();
   else await checkFasterWhisper(command.cmd);
@@ -214,6 +279,110 @@ async function transcribeWithWhisper(audioPath, outputDir, lang) {
     end: Number(s.end),
     text: String(s.text).trim()
   }));
+}
+function remoteBaseUrl(env = process.env) {
+  const value = env.TRANSCRIBE_REMOTE_URL?.trim();
+  if (!value) throw new TranscribeError("TRANSCRIBE_REMOTE_URL is required for the remote Whisper backend");
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new TranscribeError("TRANSCRIBE_REMOTE_URL must be an HTTP(S) service URL");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new TranscribeError("TRANSCRIBE_REMOTE_URL must be an HTTP(S) service root without credentials or query");
+  }
+  return url.href.replace(/\/$/, "");
+}
+async function waitForPoll(signal) {
+  await new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, REMOTE_POLL_INTERVAL_MS);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+async function remoteRequest(url, init, signal) {
+  return fetch(url, {
+    ...init,
+    signal: AbortSignal.any([signal, AbortSignal.timeout(REMOTE_REQUEST_TIMEOUT_MS)]),
+    redirect: "error"
+  });
+}
+async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal) {
+  const base = remoteBaseUrl();
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new TranscribeError("Remote Whisper timeout must be a positive number of seconds");
+  }
+  const deadline = new AbortController();
+  const deadlineTimer = setTimeout(() => deadline.abort(new Error("deadline exceeded")), timeoutSeconds * 1e3);
+  const requestSignal = upstreamSignal ? AbortSignal.any([deadline.signal, upstreamSignal]) : deadline.signal;
+  const startedAt = Date.now();
+  let jobId = "";
+  let status = "queued";
+  let upload;
+  const heartbeat = setInterval(() => {
+    if (jobId) {
+      const elapsed = Math.round((Date.now() - startedAt) / 1e3);
+      process.stderr.write(`[whisper] remote job ${jobId} ${status} ${elapsed}s
+`);
+    }
+  }, REMOTE_HEARTBEAT_INTERVAL_MS);
+  try {
+    const submitUrl = new URL(`${base}/api/whisper/jobs`);
+    if (lang) submitUrl.searchParams.set("lang", lang);
+    upload = fs.createReadStream(audioPath);
+    const submitted = await remoteRequest(submitUrl.href, {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: upload,
+      duplex: "half"
+    }, requestSignal);
+    if (submitted.status !== 202) throw new TranscribeError(`Remote Whisper submit failed: HTTP ${submitted.status}`);
+    const created = await submitted.json();
+    if (typeof created.jobId !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(created.jobId)) {
+      throw new TranscribeError("Remote Whisper returned an invalid job ID");
+    }
+    jobId = created.jobId;
+    for (; ; ) {
+      const response = await remoteRequest(`${base}/api/whisper/jobs/${jobId}`, { method: "GET" }, requestSignal);
+      if (response.status === 404) throw new TranscribeError(`Remote Whisper job ${jobId} not found (404)`);
+      if (!response.ok) throw new TranscribeError(`Remote Whisper status failed: HTTP ${response.status}`);
+      const result = await response.json();
+      if (result.status === "completed") {
+        if (!Array.isArray(result.segments)) throw new TranscribeError("Remote Whisper result has no segments");
+        return result.segments.map((segment) => {
+          if (!segment || typeof segment.start !== "number" || !Number.isFinite(segment.start) || segment.start < 0 || typeof segment.end !== "number" || !Number.isFinite(segment.end) || segment.end < segment.start || typeof segment.text !== "string" || !segment.text.trim()) {
+            throw new TranscribeError("Remote Whisper returned an invalid segment");
+          }
+          return { start: segment.start, end: segment.end, text: segment.text.trim() };
+        });
+      }
+      if (result.status === "failed") {
+        const summary = typeof result.error === "string" ? result.error.slice(0, 200) : "unknown error";
+        throw new TranscribeError(`Remote Whisper job failed: ${summary}`);
+      }
+      if (result.status !== "queued" && result.status !== "running") {
+        throw new TranscribeError("Remote Whisper returned an invalid job status");
+      }
+      status = result.status;
+      await waitForPoll(requestSignal);
+    }
+  } catch (error) {
+    if (error instanceof TranscribeError) throw error;
+    if (requestSignal.aborted) throw new TranscribeError("Remote Whisper command timed out");
+    throw new TranscribeError(`Remote Whisper request failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(deadlineTimer);
+    clearInterval(heartbeat);
+    upload?.destroy();
+  }
 }
 async function runWhisper(cmd, args) {
   return new Promise((resolve, reject) => {
@@ -413,6 +582,7 @@ cli({
   // 7 hours — Whisper on long videos can take a while
   args: [
     { name: "url", required: true, positional: true, help: "YouTube video URL or video ID" },
+    { name: "timeout", required: false, type: "int", default: 25200, help: "Command timeout in seconds (default: 7 hours)" },
     { name: "lang", required: false, help: "Language code (e.g. en, zh-Hans). Omit to auto-select" },
     { name: "mode", required: false, default: "raw", choices: ["raw", "grouped"], help: "Output mode: raw (per-segment with timestamps) or grouped (merged paragraphs)" },
     { name: "force-asr", required: false, type: "boolean", default: false, help: "Skip subtitles and always use Whisper" },
@@ -420,11 +590,13 @@ cli({
     { name: "keep-audio", required: false, type: "boolean", default: false, help: "Keep temporary audio file after transcription" }
   ],
   func: async (page, kwargs) => {
+    const commandStartedAt = Date.now();
     const url = String(kwargs.url);
     const lang = kwargs.lang ? String(kwargs.lang) : "";
     const mode = String(kwargs.mode || "raw");
     const forceAsr = Boolean(kwargs["force-asr"]);
     const keepAudio = Boolean(kwargs["keep-audio"]);
+    const timeoutSeconds = Number(kwargs.timeout ?? 25200);
     const subsOnly = Boolean(kwargs["subs-only"]);
     assertAsrFlags(forceAsr, subsOnly);
     const videoId = parseVideoId(url);
@@ -467,22 +639,31 @@ cli({
     }
     stopIfSubsOnly(subsOnly);
     console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${resolveWhisperModel()})...`);
+    const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === "remote";
+    const remainingMs = timeoutSeconds * 1e3 - (Date.now() - commandStartedAt);
+    if (remoteMode && remainingMs <= 0) throw new TranscribeError("Remote Whisper command timed out");
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
+    const remoteDeadline = remoteMode ? new AbortController() : void 0;
+    const remoteTimer = remoteDeadline ? setTimeout(() => remoteDeadline.abort(new Error("deadline exceeded")), remainingMs) : void 0;
     try {
       if (ytAudioUrl) {
         console.error("[transcribe] Downloading audio via streaming URL...");
       } else {
         console.error("[transcribe] Downloading audio via yt-dlp...");
       }
-      const audioPath = ytAudioUrl ? await downloadAudioFromUrl(ytAudioUrl, tempDir) : await downloadAudio(url, tempDir);
+      const audioPath = ytAudioUrl ? await downloadAudioFromUrl(ytAudioUrl, tempDir, remoteDeadline?.signal) : await downloadAudio(url, tempDir, "chrome", remoteDeadline?.signal);
       console.error("[transcribe] Audio ready. Starting Whisper transcription (this may take several minutes)...");
-      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
+      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
       if (segments.length === 0) {
         throw new TranscribeError("Whisper returned no segments. The audio may be too short or silent.");
       }
       return mode === "raw" ? formatRaw(segments, resolveWhisperSource()) : formatGrouped(segments, resolveWhisperSource());
+    } catch (error) {
+      if (remoteDeadline?.signal.aborted) throw new TranscribeError("Remote Whisper command timed out");
+      throw error;
     } finally {
+      if (remoteTimer) clearTimeout(remoteTimer);
       deregister();
       cleanupTempDir(tempDir, keepAudio);
     }

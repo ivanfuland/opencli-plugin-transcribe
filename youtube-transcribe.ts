@@ -27,6 +27,7 @@ cli({
   timeoutSeconds: 25200, // 7 hours — Whisper on long videos can take a while
   args: [
     { name: 'url', required: true, positional: true, help: 'YouTube video URL or video ID' },
+    { name: 'timeout', required: false, type: 'int', default: 25200, help: 'Command timeout in seconds (default: 7 hours)' },
     { name: 'lang', required: false, help: 'Language code (e.g. en, zh-Hans). Omit to auto-select' },
     { name: 'mode', required: false, default: 'raw', choices: ['raw', 'grouped'], help: 'Output mode: raw (per-segment with timestamps) or grouped (merged paragraphs)' },
     { name: 'force-asr', required: false, type: 'boolean', default: false, help: 'Skip subtitles and always use Whisper' },
@@ -34,11 +35,13 @@ cli({
     { name: 'keep-audio', required: false, type: 'boolean', default: false, help: 'Keep temporary audio file after transcription' },
   ],
   func: async (page, kwargs) => {
+    const commandStartedAt = Date.now();
     const url = String(kwargs.url);
     const lang = kwargs.lang ? String(kwargs.lang) : '';
     const mode = String(kwargs.mode || 'raw');
     const forceAsr = Boolean(kwargs['force-asr']);
     const keepAudio = Boolean(kwargs['keep-audio']);
+    const timeoutSeconds = Number(kwargs.timeout ?? 25200);
     const subsOnly = Boolean(kwargs['subs-only']);
     assertAsrFlags(forceAsr, subsOnly);
 
@@ -92,8 +95,15 @@ cli({
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     stopIfSubsOnly(subsOnly);
     console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${resolveWhisperModel()})...`);
+    const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === 'remote';
+    const remainingMs = timeoutSeconds * 1000 - (Date.now() - commandStartedAt);
+    if (remoteMode && remainingMs <= 0) throw new TranscribeError('Remote Whisper command timed out');
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
+    const remoteDeadline = remoteMode ? new AbortController() : undefined;
+    const remoteTimer = remoteDeadline
+      ? setTimeout(() => remoteDeadline.abort(new Error('deadline exceeded')), remainingMs)
+      : undefined;
 
     try {
       if (ytAudioUrl) {
@@ -102,10 +112,10 @@ cli({
         console.error('[transcribe] Downloading audio via yt-dlp...');
       }
       const audioPath = ytAudioUrl
-        ? await downloadAudioFromUrl(ytAudioUrl, tempDir)
-        : await downloadAudio(url, tempDir);
+        ? await downloadAudioFromUrl(ytAudioUrl, tempDir, remoteDeadline?.signal)
+        : await downloadAudio(url, tempDir, 'chrome', remoteDeadline?.signal);
       console.error('[transcribe] Audio ready. Starting Whisper transcription (this may take several minutes)...');
-      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
+      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
 
       if (segments.length === 0) {
         throw new TranscribeError('Whisper returned no segments. The audio may be too short or silent.');
@@ -114,7 +124,11 @@ cli({
       return mode === 'raw'
         ? formatRaw(segments, resolveWhisperSource())
         : formatGrouped(segments, resolveWhisperSource());
+    } catch (error) {
+      if (remoteDeadline?.signal.aborted) throw new TranscribeError('Remote Whisper command timed out');
+      throw error;
     } finally {
+      if (remoteTimer) clearTimeout(remoteTimer);
       deregister();
       cleanupTempDir(tempDir, keepAudio);
     }

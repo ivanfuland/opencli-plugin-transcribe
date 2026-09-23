@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { buildWhisperCommand, resolveWhisperBackend } from '../_whisper.js';
 import { checkFasterWhisper } from '../_deps.js';
 import { TranscribeError } from '../_errors.js';
+import { getRegistry } from '@jackwener/opencli/registry';
+import '../youtube-transcribe.js';
+import '../bilibili-transcribe.js';
 
 describe('resolveWhisperBackend', () => {
   it('defaults to openai when unset or blank', () => {
@@ -14,8 +17,26 @@ describe('resolveWhisperBackend', () => {
     expect(resolveWhisperBackend({ TRANSCRIBE_WHISPER_BACKEND: ' Faster-Whisper ' })).toBe('faster-whisper');
   });
 
+  it('accepts remote without changing the default', () => {
+    expect(resolveWhisperBackend({ TRANSCRIBE_WHISPER_BACKEND: ' ReMoTe ' })).toBe('remote');
+    expect(resolveWhisperBackend({})).toBe('openai');
+  });
+
   it('error path: rejects an unknown backend name', () => {
     expect(() => resolveWhisperBackend({ TRANSCRIBE_WHISPER_BACKEND: 'whisperx' })).toThrow(TranscribeError);
+  });
+});
+
+describe('opencli command registration', () => {
+  it('gives both transcribe commands an effective seven-hour timeout arg', () => {
+    for (const site of ['youtube', 'bilibili']) {
+      const command = getRegistry().get(`${site}/transcribe`);
+      expect(command?.args.find(arg => arg.name === 'timeout')).toMatchObject({
+        name: 'timeout',
+        type: 'int',
+        default: 25200,
+      });
+    }
   });
 });
 
