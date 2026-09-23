@@ -58,8 +58,37 @@ opencli list | grep transcribe
 
 ### Whisper 转录
 
-- 模型默认 `large-v3`；设置环境变量 `TRANSCRIBE_WHISPER_MODEL` 可换成任意 openai-whisper 模型名（如 `turbo`、`medium`、`small`），留空或不设时仍为 `large-v3`。显存装不下 large-v3 的机器（例如 8GB 的笔记本显卡）应设成更小的模型，因为 CPU 兜底路径已知有问题
-- 运行时 stderr 会打印一行 `[whisper] model: <名称>`，便于确认实际用的是哪个模型
+- 模型默认 `large-v3`；设置环境变量 `TRANSCRIBE_WHISPER_MODEL` 可换成任意 Whisper 模型名（如 `turbo`、`medium`、`small`），留空或不设时仍为 `large-v3`。显存装不下 large-v3 的机器（例如 8GB 的笔记本显卡）应设成更小的模型，或改用下面的 faster-whisper 后端，因为 CPU 兜底路径已知有问题
+- 后端默认是 openai-whisper 命令行。设 `TRANSCRIBE_WHISPER_BACKEND=faster-whisper` 改用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)（CTranslate2 推理，支持 int8 量化），由插件自带的 `_faster_whisper.py` 执行，输出格式与 openai-whisper 相同
+- 运行时 stderr 会打印一行 `[whisper] model: <名称>`，faster-whisper 后端会附上后端名和计算精度，便于确认实际配置
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `TRANSCRIBE_WHISPER_MODEL` | `large-v3` | 模型名，两个后端通用 |
+| `TRANSCRIBE_WHISPER_BACKEND` | `openai` | `openai` 或 `faster-whisper` |
+| `TRANSCRIBE_WHISPER_COMPUTE_TYPE` | `int8_float16` | 仅 faster-whisper：CTranslate2 计算精度，如 `float16`、`int8_float16`；回落到 CPU 时自动改用 `int8` |
+| `TRANSCRIBE_FASTER_WHISPER_PYTHON` | `python3` | 仅 faster-whisper：能 `import faster_whisper` 的 Python 解释器，通常指向专用 venv |
+
+faster-whisper 后端的 GPU 运行库：CTranslate2 需要 CUDA 12 的 cuBLAS 和 cuDNN 9。可以在同一个 venv 里装 `nvidia-cublas-cu12` 与 `nvidia-cudnn-cu12==9.*`，脚本启动时会自动预加载，不需要设置 `LD_LIBRARY_PATH`：
+
+```bash
+uv venv ~/.local/share/faster-whisper/venv
+uv pip install -p ~/.local/share/faster-whisper/venv faster-whisper nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+export TRANSCRIBE_WHISPER_BACKEND=faster-whisper
+export TRANSCRIBE_FASTER_WHISPER_PYTHON=~/.local/share/faster-whisper/venv/bin/python
+export TRANSCRIBE_WHISPER_MODEL=turbo
+```
+
+实测（RTX 4060 Laptop 8GB，91 分钟中文播客，对照人工字幕）：
+
+| 配置 | 显存峰值 | 转写耗时 | 字错误率 |
+|---|---|---|---|
+| openai-whisper small | 2196 MiB | 约 460 秒（含下载） | 8.79% |
+| openai-whisper turbo | 5674 MiB | 约 434 秒（含下载） | 6.31% |
+| faster-whisper turbo int8_float16 | 1306 MiB | 149 秒 | 6.37% |
+| faster-whisper large-v3 int8_float16 | 3034 MiB | 576 秒 | 6.45% |
+| faster-whisper large-v3 float16 | 4602 MiB | 647 秒 | 6.37% |
+
 - 设备选择：优先 CUDA GPU，CUDA 失败时 fallback 到 CPU
 - 每 30 秒输出心跳日志（`[whisper] transcribing... Ns elapsed`），防止调用方误判进程挂起
 - 超时：Whisper 子进程 30 分钟，整体命令超时 7 小时（25200 秒）
@@ -169,7 +198,8 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 ├── youtube-transcribe.ts   # YouTube 转录命令
 ├── bilibili-transcribe.ts  # Bilibili 转录命令
 ├── _download.ts            # yt-dlp 音频下载
-├── _whisper.ts             # Whisper 调用
+├── _whisper.ts             # Whisper 调用（选择后端、拼命令、解析输出）
+├── _faster_whisper.py      # faster-whisper 后端的执行脚本
 ├── _format.ts              # 输出格式化（raw / grouped）
 ├── _lang-map.ts            # 语言代码映射
 ├── _temp.ts                # 临时目录管理

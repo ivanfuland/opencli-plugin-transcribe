@@ -25,6 +25,18 @@ export async function checkWhisper(): Promise<void> {
   await checkDep('whisper', 'Install: pip install openai-whisper');
 }
 
+/** The faster-whisper backend needs a Python interpreter that can import faster_whisper. */
+export async function checkFasterWhisper(python: string): Promise<void> {
+  try {
+    await execFileAsync(python, ['-c', 'import faster_whisper']);
+  } catch (err) {
+    throw new TranscribeError(
+      `faster-whisper not importable with ${python}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}. ` +
+      'Install: pip install faster-whisper, or point TRANSCRIBE_FASTER_WHISPER_PYTHON at the venv python that has it'
+    );
+  }
+}
+
 export async function checkFfmpeg(): Promise<void> {
   await checkDep('ffmpeg', 'Install: brew install ffmpeg  or  apt install ffmpeg');
 }
