@@ -91,14 +91,22 @@ import { execFile as execFile3 } from "node:child_process";
 import * as fs from "node:fs";
 import * as path2 from "node:path";
 var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
+var DEFAULT_WHISPER_MODEL = "large-v3";
+function resolveWhisperModel(env = process.env) {
+  const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
+  return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
+}
 async function transcribeWithWhisper(audioPath, outputDir, lang) {
   await checkWhisper();
   const stem = path2.basename(audioPath, path2.extname(audioPath));
   const jsonOutput = path2.join(outputDir, `${stem}.json`);
+  const model = resolveWhisperModel();
+  process.stderr.write(`[whisper] model: ${model}
+`);
   const baseArgs = [
     audioPath,
     "--model",
-    "large-v3",
+    model,
     "--output_format",
     "json",
     "--output_dir",

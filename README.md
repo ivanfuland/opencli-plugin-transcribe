@@ -12,7 +12,7 @@ YouTube / Bilibili 视频转录插件。优先使用平台原生字幕，无字�
 | [openai-whisper](https://github.com/openai/whisper) | 本地 ASR 转录（GPU fallback） | `pip install openai-whisper` |
 | [ffmpeg](https://ffmpeg.org) | 音频格式转换 | `brew install ffmpeg` 或 `apt install ffmpeg` |
 
-**硬件要求（Whisper large-v3）：** 约 10GB VRAM（GPU）或 RAM（CPU）。首次运行会自动下载模型（约 3GB）。
+**硬件要求（Whisper large-v3）：** 约 10GB VRAM（GPU）或 RAM（CPU）。首次运行会自动下载模型（约 3GB）。显存不够时，用环境变量 `TRANSCRIBE_WHISPER_MODEL` 换更小的模型，见下文「Whisper 转录」。
 
 ## 安装
 
@@ -58,7 +58,8 @@ opencli list | grep transcribe
 
 ### Whisper 转录
 
-- 模型固定为 `large-v3`，不支持切换
+- 模型默认 `large-v3`；设置环境变量 `TRANSCRIBE_WHISPER_MODEL` 可换成任意 openai-whisper 模型名（如 `turbo`、`medium`、`small`），留空或不设时仍为 `large-v3`。显存装不下 large-v3 的机器（例如 8GB 的笔记本显卡）应设成更小的模型，因为 CPU 兜底路径已知有问题
+- 运行时 stderr 会打印一行 `[whisper] model: <名称>`，便于确认实际用的是哪个模型
 - 设备选择：优先 CUDA GPU，CUDA 失败时 fallback 到 CPU
 - 每 30 秒输出心跳日志（`[whisper] transcribing... Ns elapsed`），防止调用方误判进程挂起
 - 超时：Whisper 子进程 30 分钟，整体命令超时 7 小时（25200 秒）
@@ -151,13 +152,12 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 `source` 字段取值：
 - `manual_caption` — 平台人工字幕
 - `auto_caption` — 平台自动生成字幕（YouTube ASR / Bilibili AI 字幕）
-- `whisper_large_v3` — 本地 Whisper 转录
+- `whisper_large_v3` — 本地 Whisper 转录。为保持输出兼容，这个值不随 `TRANSCRIBE_WHISPER_MODEL` 变化；实际模型看 stderr 的 `[whisper] model:` 行
 
 ## 已知限制
 
-- Whisper `large-v3` 需要约 10GB VRAM，长视频（>1h）单次转录可能超过 30 分钟
+- Whisper `large-v3` 需要约 10GB VRAM，长视频（>1h）单次转录可能超过 30 分钟；显存不够时用 `TRANSCRIBE_WHISPER_MODEL` 换小模型
 - 仅支持 YouTube 和 Bilibili 两个平台
-- Whisper 模型固定为 `large-v3`，不支持切换
 - 不支持远程 ASR API，仅本地推理
 - yt-dlp / WBI API 可能随平台更新而失效，届时请更新插件
 
