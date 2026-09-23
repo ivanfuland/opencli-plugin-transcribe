@@ -7,8 +7,13 @@ opencli-plugin-transcribe: YouTube / Bilibili 视频转录插件，优先使用�
 ## Build & Test
 
 ```bash
-# 编译单个 .ts 文件（每次修改 .ts 后都要重新编译对应的 .js）
-npx esbuild <file>.ts --bundle --platform=node --format=esm --packages=external --outfile=<file>.js --allow-overwrite
+# 命令入口（youtube-transcribe、bilibili-transcribe）：打包，内部模块会被内联进来
+npx esbuild <entry>.ts --bundle --platform=node --format=esm --packages=external --outfile=<entry>.js --allow-overwrite
+
+# 内部模块（_ 开头）与 vitest.config：只转译，保留 import，不要加 --bundle
+npx esbuild <module>.ts --platform=node --format=esm --outfile=<module>.js --allow-overwrite
+
+# 改了任何内部模块，两个命令入口都要重新打包，否则运行时仍是入口里内联的旧代码
 
 # 运行测试
 npm test
@@ -52,8 +57,9 @@ opencli plugin install github:ivanfuland/opencli-plugin-transcribe
 
 ## Whisper 环境
 
-- 仅考虑 GPU 模式（4090 + PyTorch + CUDA）
+- 仅考虑 GPU 模式（PyTorch + CUDA）
 - CPU 模式已知有问题，不修复
+- 模型默认 `large-v3`（4090 上使用）；`TRANSCRIBE_WHISPER_MODEL` 环境变量可改用更小的模型，给显存放不下 large-v3 的机器（如 8GB 的 RTX 4060 Laptop）用。解析逻辑在 `_whisper.ts` 的 `resolveWhisperModel()`，有单测
 
 ## Known Pitfalls
 
