@@ -15,7 +15,7 @@
 
 import { createHash } from 'node:crypto';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { TranscribeError } from './_errors.js';
+import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio } from './_download.js';
 import { transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
@@ -44,6 +44,7 @@ cli({
     { name: 'lang', required: false, help: '字幕语言代码 (如 zh-CN, en-US)' },
     { name: 'mode', required: false, default: 'raw', choices: ['raw', 'grouped'], help: '输出模式：raw（逐句带时间戳）或 grouped（合并段落）' },
     { name: 'force-asr', required: false, type: 'boolean', default: false, help: '跳过字幕，直接使用 Whisper' },
+    { name: 'subs-only', required: false, type: 'boolean', default: false, help: '只取字幕；没有字幕时以 TRANSCRIBE_NO_SUBTITLES 失败，不回落到 Whisper' },
     { name: 'keep-audio', required: false, type: 'boolean', default: false, help: '保留临时音频文件' },
   ],
   func: async (page, kwargs) => {
@@ -52,6 +53,8 @@ cli({
     const mode = String(kwargs.mode || 'raw');
     const forceAsr = Boolean(kwargs['force-asr']);
     const keepAudio = Boolean(kwargs['keep-audio']);
+    const subsOnly = Boolean(kwargs['subs-only']);
+    assertAsrFlags(forceAsr, subsOnly);
 
     const videoUrl = normalizeBilibiliUrl(inputUrl);
     const whisperLang = lang ? langMap(lang) : undefined;
@@ -74,6 +77,7 @@ cli({
     }
 
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
+    stopIfSubsOnly(subsOnly);
     console.error('[transcribe] 未找到字幕，回落到 Whisper large-v3 ASR...');
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
