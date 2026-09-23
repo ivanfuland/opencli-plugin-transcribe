@@ -31,6 +31,15 @@ async function checkYtDlp() {
 async function checkWhisper() {
   await checkDep("whisper", "Install: pip install openai-whisper");
 }
+async function checkFasterWhisper(python) {
+  try {
+    await execFileAsync(python, ["-c", "import faster_whisper"]);
+  } catch (err) {
+    throw new TranscribeError(
+      `faster-whisper not importable with ${python}: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}. Install: pip install faster-whisper, or point TRANSCRIBE_FASTER_WHISPER_PYTHON at the venv python that has it`
+    );
+  }
+}
 async function checkFfmpeg() {
   await checkDep("ffmpeg", "Install: brew install ffmpeg  or  apt install ffmpeg");
 }
@@ -90,36 +99,59 @@ async function downloadAudio(url, outputDir, cookiesBrowser = "chrome") {
 import { execFile as execFile3 } from "node:child_process";
 import * as fs from "node:fs";
 import * as path2 from "node:path";
+import { fileURLToPath } from "node:url";
 var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
 var DEFAULT_WHISPER_MODEL = "large-v3";
+var DEFAULT_COMPUTE_TYPE = "int8_float16";
+var DEFAULT_FASTER_WHISPER_PYTHON = "python3";
+var FASTER_WHISPER_SCRIPT = fileURLToPath(new URL("./_faster_whisper.py", import.meta.url));
 function resolveWhisperModel(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
+function resolveWhisperBackend(env = process.env) {
+  const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
+  if (!fromEnv || fromEnv === "openai") return "openai";
+  if (fromEnv === "faster-whisper") return "faster-whisper";
+  throw new TranscribeError(
+    `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai" or "faster-whisper".`
+  );
+}
+function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
+  const backend = resolveWhisperBackend(env);
+  const model = resolveWhisperModel(env);
+  const args = [audioPath, "--model", model];
+  if (backend === "openai") {
+    args.push("--output_format", "json", "--output_dir", outputDir);
+    if (lang) args.push("--language", lang);
+    return { backend, cmd: "whisper", args, label: model };
+  }
+  const computeType = env.TRANSCRIBE_WHISPER_COMPUTE_TYPE?.trim() || DEFAULT_COMPUTE_TYPE;
+  const python = env.TRANSCRIBE_FASTER_WHISPER_PYTHON?.trim() || DEFAULT_FASTER_WHISPER_PYTHON;
+  args.push("--output_dir", outputDir, "--compute_type", computeType);
+  if (lang) args.push("--language", lang);
+  return {
+    backend,
+    cmd: python,
+    args: [FASTER_WHISPER_SCRIPT, ...args],
+    label: `${model} (faster-whisper, ${computeType})`
+  };
+}
 async function transcribeWithWhisper(audioPath, outputDir, lang) {
-  await checkWhisper();
+  const command = buildWhisperCommand(audioPath, outputDir, lang);
+  if (command.backend === "openai") await checkWhisper();
+  else await checkFasterWhisper(command.cmd);
   const stem = path2.basename(audioPath, path2.extname(audioPath));
   const jsonOutput = path2.join(outputDir, `${stem}.json`);
-  const model = resolveWhisperModel();
-  process.stderr.write(`[whisper] model: ${model}
+  process.stderr.write(`[whisper] model: ${command.label}
 `);
-  const baseArgs = [
-    audioPath,
-    "--model",
-    model,
-    "--output_format",
-    "json",
-    "--output_dir",
-    outputDir
-  ];
-  if (lang) baseArgs.push("--language", lang);
   try {
-    await runWhisper([...baseArgs, "--device", "cuda"]);
+    await runWhisper(command.cmd, [...command.args, "--device", "cuda"]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/cuda|CUDA|RuntimeError/i.test(msg)) {
       console.error(`Warning: CUDA failed (${msg.split("\n")[0]}). Retrying on CPU...`);
-      await runWhisper([...baseArgs, "--device", "cpu"]);
+      await runWhisper(command.cmd, [...command.args, "--device", "cpu"]);
     } else {
       throw err;
     }
@@ -140,7 +172,7 @@ async function transcribeWithWhisper(audioPath, outputDir, lang) {
     text: String(s.text).trim()
   }));
 }
-async function runWhisper(args) {
+async function runWhisper(cmd, args) {
   return new Promise((resolve, reject) => {
     let stderr = "";
     const startTime = Date.now();
@@ -149,7 +181,7 @@ async function runWhisper(args) {
       process.stderr.write(`[whisper] transcribing... ${elapsed}s elapsed
 `);
     }, 3e4);
-    const proc = execFile3("whisper", args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
+    const proc = execFile3(cmd, args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
       clearInterval(heartbeat);
       if (err) {
         reject(new TranscribeError(

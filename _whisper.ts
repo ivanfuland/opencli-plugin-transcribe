@@ -2,23 +2,79 @@
  * Whisper transcription via CLI subprocess for opencli-plugin-transcribe.
  * Uses whisper large-v3 by default; set TRANSCRIBE_WHISPER_MODEL to pick another
  * model (e.g. turbo, small) on GPUs that cannot hold large-v3.
+ * Backend: openai-whisper CLI by default; TRANSCRIBE_WHISPER_BACKEND=faster-whisper runs
+ * _faster_whisper.py (CTranslate2, int8 quantization) instead.
  * GPU fallback: CUDA → CPU on failure.
  */
 
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { checkWhisper } from './_deps.js';
+import { fileURLToPath } from 'node:url';
+import { checkFasterWhisper, checkWhisper } from './_deps.js';
 import { TranscribeError } from './_errors.js';
 
 const WHISPER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 export const DEFAULT_WHISPER_MODEL = 'large-v3';
+export const DEFAULT_COMPUTE_TYPE = 'int8_float16';
+export const DEFAULT_FASTER_WHISPER_PYTHON = 'python3';
+
+// Sits next to this file; the bundled command entries live in the same plugin root.
+const FASTER_WHISPER_SCRIPT = fileURLToPath(new URL('./_faster_whisper.py', import.meta.url));
+
+export type WhisperBackend = 'openai' | 'faster-whisper';
 
 /** Model name passed to `whisper --model`: TRANSCRIBE_WHISPER_MODEL if set and non-empty, else large-v3. */
 export function resolveWhisperModel(env: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
+}
+
+/** TRANSCRIBE_WHISPER_BACKEND: unset or blank means openai; anything other than the two names is an error. */
+export function resolveWhisperBackend(env: NodeJS.ProcessEnv = process.env): WhisperBackend {
+  const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
+  if (!fromEnv || fromEnv === 'openai') return 'openai';
+  if (fromEnv === 'faster-whisper') return 'faster-whisper';
+  throw new TranscribeError(
+    `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai" or "faster-whisper".`
+  );
+}
+
+export interface WhisperCommand {
+  backend: WhisperBackend;
+  cmd: string;
+  /** Arguments without --device, which is appended per attempt (cuda, then cpu). */
+  args: string[];
+  /** Human-readable model description for the stderr log line. */
+  label: string;
+}
+
+/** Build the subprocess command for the configured backend. Pure: reads only `env`. */
+export function buildWhisperCommand(
+  audioPath: string,
+  outputDir: string,
+  lang?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): WhisperCommand {
+  const backend = resolveWhisperBackend(env);
+  const model = resolveWhisperModel(env);
+  const args = [audioPath, '--model', model];
+  if (backend === 'openai') {
+    args.push('--output_format', 'json', '--output_dir', outputDir);
+    if (lang) args.push('--language', lang);
+    return { backend, cmd: 'whisper', args, label: model };
+  }
+  const computeType = env.TRANSCRIBE_WHISPER_COMPUTE_TYPE?.trim() || DEFAULT_COMPUTE_TYPE;
+  const python = env.TRANSCRIBE_FASTER_WHISPER_PYTHON?.trim() || DEFAULT_FASTER_WHISPER_PYTHON;
+  args.push('--output_dir', outputDir, '--compute_type', computeType);
+  if (lang) args.push('--language', lang);
+  return {
+    backend,
+    cmd: python,
+    args: [FASTER_WHISPER_SCRIPT, ...args],
+    label: `${model} (faster-whisper, ${computeType})`,
+  };
 }
 
 export interface WhisperSegment {
@@ -38,30 +94,23 @@ export async function transcribeWithWhisper(
   outputDir: string,
   lang?: string,
 ): Promise<WhisperSegment[]> {
-  await checkWhisper();
+  const command = buildWhisperCommand(audioPath, outputDir, lang);
+  if (command.backend === 'openai') await checkWhisper();
+  else await checkFasterWhisper(command.cmd);
 
   const stem = path.basename(audioPath, path.extname(audioPath));
   const jsonOutput = path.join(outputDir, `${stem}.json`);
 
-  const model = resolveWhisperModel();
-  process.stderr.write(`[whisper] model: ${model}\n`);
-
-  const baseArgs = [
-    audioPath,
-    '--model', model,
-    '--output_format', 'json',
-    '--output_dir', outputDir,
-  ];
-  if (lang) baseArgs.push('--language', lang);
+  process.stderr.write(`[whisper] model: ${command.label}\n`);
 
   // Try CUDA first, fall back to CPU on CUDA-related errors
   try {
-    await runWhisper([...baseArgs, '--device', 'cuda']);
+    await runWhisper(command.cmd, [...command.args, '--device', 'cuda']);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/cuda|CUDA|RuntimeError/i.test(msg)) {
       console.error(`Warning: CUDA failed (${msg.split('\n')[0]}). Retrying on CPU...`);
-      await runWhisper([...baseArgs, '--device', 'cpu']);
+      await runWhisper(command.cmd, [...command.args, '--device', 'cpu']);
     } else {
       throw err;
     }
@@ -85,7 +134,7 @@ export async function transcribeWithWhisper(
   }));
 }
 
-async function runWhisper(args: string[]): Promise<void> {
+async function runWhisper(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = '';
     const startTime = Date.now();
@@ -96,7 +145,7 @@ async function runWhisper(args: string[]): Promise<void> {
       process.stderr.write(`[whisper] transcribing... ${elapsed}s elapsed\n`);
     }, 30_000);
 
-    const proc = execFile('whisper', args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
+    const proc = execFile(cmd, args, { timeout: WHISPER_TIMEOUT_MS }, (err) => {
       clearInterval(heartbeat);
       if (err) {
         reject(new TranscribeError(
