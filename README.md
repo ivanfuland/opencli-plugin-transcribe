@@ -184,7 +184,7 @@ opencli bilibili transcribe BV1xx411c7mD --force-asr
 `source` 字段取值：
 - `manual_caption` — 平台人工字幕
 - `auto_caption` — 平台自动生成字幕（YouTube ASR / Bilibili AI 字幕）
-- `whisper_large_v3` — 本地 Whisper 转录。为保持输出兼容，这个值不随 `TRANSCRIBE_WHISPER_MODEL` 变化；实际模型看 stderr 的 `[whisper] model:` 行
+- `whisper_<模型>` — 本地 Whisper 转录，值随 `TRANSCRIBE_WHISPER_MODEL` 变化：模型名转小写、非字母数字换成 `_`，如默认的 `whisper_large_v3`、`turbo` 对应的 `whisper_turbo`
 
 ## 已知限制
 

@@ -9,7 +9,8 @@
  *           src/clis/youtube/transcript-group.ts (sentence grouping logic)
  */
 
-export type TranscribeSource = 'manual_caption' | 'auto_caption' | 'whisper_large_v3';
+/** Whisper rows carry the model actually used, e.g. `whisper_large_v3` or `whisper_turbo`. */
+export type TranscribeSource = 'manual_caption' | 'auto_caption' | `whisper_${string}`;
 
 export interface RawRow {
   index: number;

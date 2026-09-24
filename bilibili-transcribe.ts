@@ -1,7 +1,7 @@
 /**
  * opencli-plugin-transcribe: bilibili transcribe command
  *
- * Subtitle-first (WBI-signed API via browser fetch), Whisper large-v3 fallback.
+ * Subtitle-first (WBI-signed API via browser fetch), Whisper fallback (model from TRANSCRIBE_WHISPER_MODEL).
  * Reference: src/clis/bilibili/subtitle.ts, src/clis/bilibili/utils.ts (2026-04-01)
  *
  * Bilibili subtitle flow:
@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio } from './_download.js';
-import { transcribeWithWhisper } from './_whisper.js';
+import { resolveWhisperModel, resolveWhisperSource, transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
@@ -34,11 +34,11 @@ const MIXIN_KEY_ENC_TAB = [
 cli({
   site: 'bilibili',
   name: 'transcribe',
-  description: '转录 Bilibili 视频（字幕优先，无字幕时 Whisper large-v3 兜底）',
+  description: '转录 Bilibili 视频（字幕优先，无字幕时 Whisper 兜底）',
   domain: 'www.bilibili.com',
   strategy: Strategy.COOKIE,
   access: 'read',
-  timeoutSeconds: 25200, // 7 hours — Whisper large-v3 on long videos can take a while
+  timeoutSeconds: 25200, // 7 hours — Whisper on long videos can take a while
   args: [
     { name: 'url', required: true, positional: true, help: 'Bilibili 视频 URL 或 BVID (如 BV1xxxxxx)' },
     { name: 'lang', required: false, help: '字幕语言代码 (如 zh-CN, en-US)' },
@@ -78,7 +78,7 @@ cli({
 
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     stopIfSubsOnly(subsOnly);
-    console.error('[transcribe] 未找到字幕，回落到 Whisper large-v3 ASR...');
+    console.error(`[transcribe] 未找到字幕，回落到 Whisper ASR（${resolveWhisperModel()}）...`);
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
 
@@ -93,8 +93,8 @@ cli({
       }
 
       return mode === 'raw'
-        ? formatRaw(segments, 'whisper_large_v3')
-        : formatGrouped(segments, 'whisper_large_v3');
+        ? formatRaw(segments, resolveWhisperSource())
+        : formatGrouped(segments, resolveWhisperSource());
     } finally {
       deregister();
       cleanupTempDir(tempDir, keepAudio);
