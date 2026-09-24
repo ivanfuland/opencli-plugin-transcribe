@@ -145,6 +145,13 @@ function resolveWhisperModel(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
+function whisperSource(model) {
+  const slug = model.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return `whisper_${slug || "unknown"}`;
+}
+function resolveWhisperSource(env = process.env) {
+  return whisperSource(resolveWhisperModel(env));
+}
 function resolveWhisperBackend(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
@@ -398,12 +405,12 @@ function pickSubtitleLang(manualLangs, autoLangs, userLang, videoLang) {
 cli({
   site: "youtube",
   name: "transcribe",
-  description: "Transcribe a YouTube video (subtitles first, Whisper large-v3 fallback)",
+  description: "Transcribe a YouTube video (subtitles first, Whisper fallback)",
   domain: "www.youtube.com",
   strategy: Strategy.COOKIE,
   access: "read",
   timeoutSeconds: 25200,
-  // 7 hours — Whisper large-v3 on long videos can take a while
+  // 7 hours — Whisper on long videos can take a while
   args: [
     { name: "url", required: true, positional: true, help: "YouTube video URL or video ID" },
     { name: "lang", required: false, help: "Language code (e.g. en, zh-Hans). Omit to auto-select" },
@@ -459,7 +466,7 @@ cli({
       }
     }
     stopIfSubsOnly(subsOnly);
-    console.error("[transcribe] No subtitles found. Falling back to Whisper large-v3 ASR...");
+    console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${resolveWhisperModel()})...`);
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
     try {
@@ -474,7 +481,7 @@ cli({
       if (segments.length === 0) {
         throw new TranscribeError("Whisper returned no segments. The audio may be too short or silent.");
       }
-      return mode === "raw" ? formatRaw(segments, "whisper_large_v3") : formatGrouped(segments, "whisper_large_v3");
+      return mode === "raw" ? formatRaw(segments, resolveWhisperSource()) : formatGrouped(segments, resolveWhisperSource());
     } finally {
       deregister();
       cleanupTempDir(tempDir, keepAudio);

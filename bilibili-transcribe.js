@@ -116,6 +116,13 @@ function resolveWhisperModel(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
+function whisperSource(model) {
+  const slug = model.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return `whisper_${slug || "unknown"}`;
+}
+function resolveWhisperSource(env = process.env) {
+  return whisperSource(resolveWhisperModel(env));
+}
 function resolveWhisperBackend(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
@@ -400,12 +407,12 @@ var MIXIN_KEY_ENC_TAB = [
 cli({
   site: "bilibili",
   name: "transcribe",
-  description: "\u8F6C\u5F55 Bilibili \u89C6\u9891\uFF08\u5B57\u5E55\u4F18\u5148\uFF0C\u65E0\u5B57\u5E55\u65F6 Whisper large-v3 \u515C\u5E95\uFF09",
+  description: "\u8F6C\u5F55 Bilibili \u89C6\u9891\uFF08\u5B57\u5E55\u4F18\u5148\uFF0C\u65E0\u5B57\u5E55\u65F6 Whisper \u515C\u5E95\uFF09",
   domain: "www.bilibili.com",
   strategy: Strategy.COOKIE,
   access: "read",
   timeoutSeconds: 25200,
-  // 7 hours — Whisper large-v3 on long videos can take a while
+  // 7 hours — Whisper on long videos can take a while
   args: [
     { name: "url", required: true, positional: true, help: "Bilibili \u89C6\u9891 URL \u6216 BVID (\u5982 BV1xxxxxx)" },
     { name: "lang", required: false, help: "\u5B57\u5E55\u8BED\u8A00\u4EE3\u7801 (\u5982 zh-CN, en-US)" },
@@ -437,7 +444,7 @@ cli({
       }
     }
     stopIfSubsOnly(subsOnly);
-    console.error("[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper large-v3 ASR...");
+    console.error(`[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper ASR\uFF08${resolveWhisperModel()}\uFF09...`);
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
     try {
@@ -448,7 +455,7 @@ cli({
       if (segments.length === 0) {
         throw new TranscribeError("Whisper \u6CA1\u6709\u8FD4\u56DE\u4EFB\u4F55\u7247\u6BB5\uFF0C\u97F3\u9891\u53EF\u80FD\u8FC7\u77ED\u6216\u65E0\u58F0\u3002");
       }
-      return mode === "raw" ? formatRaw(segments, "whisper_large_v3") : formatGrouped(segments, "whisper_large_v3");
+      return mode === "raw" ? formatRaw(segments, resolveWhisperSource()) : formatGrouped(segments, resolveWhisperSource());
     } finally {
       deregister();
       cleanupTempDir(tempDir, keepAudio);

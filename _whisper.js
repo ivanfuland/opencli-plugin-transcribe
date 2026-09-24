@@ -13,6 +13,13 @@ function resolveWhisperModel(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
+function whisperSource(model) {
+  const slug = model.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return `whisper_${slug || "unknown"}`;
+}
+function resolveWhisperSource(env = process.env) {
+  return whisperSource(resolveWhisperModel(env));
+}
 function resolveWhisperBackend(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
@@ -109,5 +116,7 @@ export {
   buildWhisperCommand,
   resolveWhisperBackend,
   resolveWhisperModel,
-  transcribeWithWhisper
+  resolveWhisperSource,
+  transcribeWithWhisper,
+  whisperSource
 };

@@ -1,7 +1,7 @@
 /**
  * opencli-plugin-transcribe: youtube transcribe command
  *
- * Subtitle-first (yt-dlp subtitle download), Whisper large-v3 fallback.
+ * Subtitle-first (yt-dlp subtitle download), Whisper fallback (model from TRANSCRIBE_WHISPER_MODEL).
  * Reference: src/clis/youtube/transcript.ts (2026-04-01)
  */
 
@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio, downloadAudioFromUrl } from './_download.js';
-import { transcribeWithWhisper } from './_whisper.js';
+import { resolveWhisperModel, resolveWhisperSource, transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
@@ -20,11 +20,11 @@ import { pickSubtitleLang } from './_pick-subtitle-lang.js';
 cli({
   site: 'youtube',
   name: 'transcribe',
-  description: 'Transcribe a YouTube video (subtitles first, Whisper large-v3 fallback)',
+  description: 'Transcribe a YouTube video (subtitles first, Whisper fallback)',
   domain: 'www.youtube.com',
   strategy: Strategy.COOKIE,
   access: 'read',
-  timeoutSeconds: 25200, // 7 hours — Whisper large-v3 on long videos can take a while
+  timeoutSeconds: 25200, // 7 hours — Whisper on long videos can take a while
   args: [
     { name: 'url', required: true, positional: true, help: 'YouTube video URL or video ID' },
     { name: 'lang', required: false, help: 'Language code (e.g. en, zh-Hans). Omit to auto-select' },
@@ -91,7 +91,7 @@ cli({
 
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     stopIfSubsOnly(subsOnly);
-    console.error('[transcribe] No subtitles found. Falling back to Whisper large-v3 ASR...');
+    console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${resolveWhisperModel()})...`);
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
 
@@ -112,8 +112,8 @@ cli({
       }
 
       return mode === 'raw'
-        ? formatRaw(segments, 'whisper_large_v3')
-        : formatGrouped(segments, 'whisper_large_v3');
+        ? formatRaw(segments, resolveWhisperSource())
+        : formatGrouped(segments, resolveWhisperSource());
     } finally {
       deregister();
       cleanupTempDir(tempDir, keepAudio);

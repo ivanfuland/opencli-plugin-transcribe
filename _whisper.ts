@@ -31,6 +31,20 @@ export function resolveWhisperModel(env: NodeJS.ProcessEnv = process.env): strin
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
 
+/**
+ * Output `source` value for a Whisper model: `whisper_` plus the model name with every run of
+ * non-alphanumerics turned into `_`. The default large-v3 keeps the historical `whisper_large_v3`.
+ */
+export function whisperSource(model: string): `whisper_${string}` {
+  const slug = model.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return `whisper_${slug || 'unknown'}`;
+}
+
+/** `source` value for the model TRANSCRIBE_WHISPER_MODEL selects. */
+export function resolveWhisperSource(env: NodeJS.ProcessEnv = process.env): `whisper_${string}` {
+  return whisperSource(resolveWhisperModel(env));
+}
+
 /** TRANSCRIBE_WHISPER_BACKEND: unset or blank means openai; anything other than the two names is an error. */
 export function resolveWhisperBackend(env: NodeJS.ProcessEnv = process.env): WhisperBackend {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
