@@ -41,6 +41,7 @@ cli({
   timeoutSeconds: 25200, // 7 hours — Whisper on long videos can take a while
   args: [
     { name: 'url', required: true, positional: true, help: 'Bilibili 视频 URL 或 BVID (如 BV1xxxxxx)' },
+    { name: 'timeout', required: false, type: 'int', default: 25200, help: '命令超时秒数（默认 7 小时）' },
     { name: 'lang', required: false, help: '字幕语言代码 (如 zh-CN, en-US)' },
     { name: 'mode', required: false, default: 'raw', choices: ['raw', 'grouped'], help: '输出模式：raw（逐句带时间戳）或 grouped（合并段落）' },
     { name: 'force-asr', required: false, type: 'boolean', default: false, help: '跳过字幕，直接使用 Whisper' },
@@ -48,11 +49,13 @@ cli({
     { name: 'keep-audio', required: false, type: 'boolean', default: false, help: '保留临时音频文件' },
   ],
   func: async (page, kwargs) => {
+    const commandStartedAt = Date.now();
     const inputUrl = String(kwargs.url);
     const lang = kwargs.lang ? String(kwargs.lang) : '';
     const mode = String(kwargs.mode || 'raw');
     const forceAsr = Boolean(kwargs['force-asr']);
     const keepAudio = Boolean(kwargs['keep-audio']);
+    const timeoutSeconds = Number(kwargs.timeout ?? 25200);
     const subsOnly = Boolean(kwargs['subs-only']);
     assertAsrFlags(forceAsr, subsOnly);
 
@@ -79,14 +82,21 @@ cli({
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     stopIfSubsOnly(subsOnly);
     console.error(`[transcribe] 未找到字幕，回落到 Whisper ASR（${resolveWhisperModel()}）...`);
+    const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === 'remote';
+    const remainingMs = timeoutSeconds * 1000 - (Date.now() - commandStartedAt);
+    if (remoteMode && remainingMs <= 0) throw new TranscribeError('Remote Whisper command timed out');
     const tempDir = createTempDir();
     const deregister = registerCleanupHook(tempDir);
+    const remoteDeadline = remoteMode ? new AbortController() : undefined;
+    const remoteTimer = remoteDeadline
+      ? setTimeout(() => remoteDeadline.abort(new Error('deadline exceeded')), remainingMs)
+      : undefined;
 
     try {
       console.error('[transcribe] 正在通过 yt-dlp 下载音频...');
-      const audioPath = await downloadAudio(videoUrl, tempDir);
+      const audioPath = await downloadAudio(videoUrl, tempDir, 'chrome', remoteDeadline?.signal);
       console.error('[transcribe] 音频就绪，开始 Whisper 转录（可能需要数分钟）...');
-      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang);
+      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
 
       if (segments.length === 0) {
         throw new TranscribeError('Whisper 没有返回任何片段，音频可能过短或无声。');
@@ -95,7 +105,11 @@ cli({
       return mode === 'raw'
         ? formatRaw(segments, resolveWhisperSource())
         : formatGrouped(segments, resolveWhisperSource());
+    } catch (error) {
+      if (remoteDeadline?.signal.aborted) throw new TranscribeError('Remote Whisper command timed out');
+      throw error;
     } finally {
+      if (remoteTimer) clearTimeout(remoteTimer);
       deregister();
       cleanupTempDir(tempDir, keepAudio);
     }

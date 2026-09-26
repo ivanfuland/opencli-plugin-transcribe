@@ -60,7 +60,8 @@ opencli plugin install github:ivanfuland/opencli-plugin-transcribe
 - 仅考虑 GPU 模式（PyTorch + CUDA）
 - CPU 模式已知有问题，不修复
 - 模型默认 `large-v3`（4090 上使用）；`TRANSCRIBE_WHISPER_MODEL` 环境变量可改用更小的模型，给显存放不下 large-v3 的机器（如 8GB 的 RTX 4060 Laptop）用。解析逻辑在 `_whisper.ts` 的 `resolveWhisperModel()`，有单测
-- 两个后端：默认 openai-whisper 命令行；`TRANSCRIBE_WHISPER_BACKEND=faster-whisper` 时运行根目录的 `_faster_whisper.py`。命令由纯函数 `buildWhisperCommand()` 拼出，单测覆盖两种后端；脚本输出与 openai-whisper 同格式的 JSON，解析代码共用
+- 三个后端：默认 openai-whisper 命令行；`TRANSCRIBE_WHISPER_BACKEND=faster-whisper` 时运行根目录的 `_faster_whisper.py`；`remote` 时流式上传 WAV 到 `TRANSCRIBE_REMOTE_URL` 并轮询结果，不检查本地模型也不回落本地。命令由纯函数 `buildWhisperCommand()` 拼出，单测覆盖两个本地后端；远端走本地假 HTTP 服务测试
+- opencli 1.8.7 只读取命令 `args` 中的 `timeout` 参数，顶层 `timeoutSeconds` 不生效。两条转写命令都声明默认 25200 秒；远端后端必须在自己的截止时间中止请求，不能只靠 opencli 的 Promise race
 - `_faster_whisper.py` 启动时用 ctypes 预加载 `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheel 里的库：CTranslate2 按 soname dlopen 这些库，而 site-packages 不在加载路径上，进程内又改不了 `LD_LIBRARY_PATH`。去掉预加载会报 `libcublas.so.12 is not found`
 
 ## Known Pitfalls
