@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio } from './_download.js';
-import { resolveWhisperModel, resolveWhisperSource, transcribeWithWhisper } from './_whisper.js';
+import { resolveWhisperModel, transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
@@ -96,15 +96,15 @@ cli({
       console.error('[transcribe] 正在通过 yt-dlp 下载音频...');
       const audioPath = await downloadAudio(videoUrl, tempDir, 'chrome', remoteDeadline?.signal);
       console.error('[transcribe] 音频就绪，开始 Whisper 转录（可能需要数分钟）...');
-      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
+      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
 
       if (segments.length === 0) {
         throw new TranscribeError('Whisper 没有返回任何片段，音频可能过短或无声。');
       }
 
       return mode === 'raw'
-        ? formatRaw(segments, resolveWhisperSource())
-        : formatGrouped(segments, resolveWhisperSource());
+        ? formatRaw(segments, source)
+        : formatGrouped(segments, source);
     } catch (error) {
       if (remoteDeadline?.signal.aborted) throw new TranscribeError('Remote Whisper command timed out');
       throw error;

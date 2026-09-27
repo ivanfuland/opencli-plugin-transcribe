@@ -210,6 +210,7 @@ function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
     label: `${model} (faster-whisper, ${computeType})`
   };
 }
+var UNKNOWN_MODEL_SOURCE = whisperSource("");
 async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal) {
   if (resolveWhisperBackend() === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
   const command = buildWhisperCommand(audioPath, outputDir, lang);
@@ -240,11 +241,15 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
     );
   }
   const segments = parsed.segments ?? [];
-  return segments.map((s) => ({
-    start: Number(s.start),
-    end: Number(s.end),
-    text: String(s.text).trim()
-  }));
+  return {
+    segments: segments.map((s) => ({
+      start: Number(s.start),
+      end: Number(s.end),
+      text: String(s.text).trim()
+    })),
+    // 本地后端：模型就是本地配置选的那个，标签与之一致
+    source: resolveWhisperSource()
+  };
 }
 function remoteBaseUrl(env = process.env) {
   const value = env.TRANSCRIBE_REMOTE_URL?.trim();
@@ -323,12 +328,14 @@ async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal)
       const result = await response.json();
       if (result.status === "completed") {
         if (!Array.isArray(result.segments)) throw new TranscribeError("Remote Whisper result has no segments");
-        return result.segments.map((segment) => {
+        const source = typeof result.model === "string" && result.model.trim() ? whisperSource(result.model) : UNKNOWN_MODEL_SOURCE;
+        const segments = result.segments.map((segment) => {
           if (!segment || typeof segment.start !== "number" || !Number.isFinite(segment.start) || segment.start < 0 || typeof segment.end !== "number" || !Number.isFinite(segment.end) || segment.end < segment.start || typeof segment.text !== "string" || !segment.text.trim()) {
             throw new TranscribeError("Remote Whisper returned an invalid segment");
           }
           return { start: segment.start, end: segment.end, text: segment.text.trim() };
         });
+        return { segments, source };
       }
       if (result.status === "failed") {
         const summary = typeof result.error === "string" ? result.error.slice(0, 200) : "unknown error";
@@ -623,11 +630,11 @@ cli({
       console.error("[transcribe] \u6B63\u5728\u901A\u8FC7 yt-dlp \u4E0B\u8F7D\u97F3\u9891...");
       const audioPath = await downloadAudio(videoUrl, tempDir, "chrome", remoteDeadline?.signal);
       console.error("[transcribe] \u97F3\u9891\u5C31\u7EEA\uFF0C\u5F00\u59CB Whisper \u8F6C\u5F55\uFF08\u53EF\u80FD\u9700\u8981\u6570\u5206\u949F\uFF09...");
-      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
+      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
       if (segments.length === 0) {
         throw new TranscribeError("Whisper \u6CA1\u6709\u8FD4\u56DE\u4EFB\u4F55\u7247\u6BB5\uFF0C\u97F3\u9891\u53EF\u80FD\u8FC7\u77ED\u6216\u65E0\u58F0\u3002");
       }
-      return mode === "raw" ? formatRaw(segments, resolveWhisperSource()) : formatGrouped(segments, resolveWhisperSource());
+      return mode === "raw" ? formatRaw(segments, source) : formatGrouped(segments, source);
     } catch (error) {
       if (remoteDeadline?.signal.aborted) throw new TranscribeError("Remote Whisper command timed out");
       throw error;

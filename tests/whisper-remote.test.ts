@@ -9,6 +9,7 @@ import { TranscribeError } from '../_errors.js';
 const JOB_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 const priorBackend = process.env.TRANSCRIBE_WHISPER_BACKEND;
 const priorUrl = process.env.TRANSCRIBE_REMOTE_URL;
+const priorModel = process.env.TRANSCRIBE_WHISPER_MODEL;
 const servers: Server[] = [];
 const dirs: string[] = [];
 
@@ -34,6 +35,8 @@ afterEach(async () => {
   else process.env.TRANSCRIBE_WHISPER_BACKEND = priorBackend;
   if (priorUrl === undefined) delete process.env.TRANSCRIBE_REMOTE_URL;
   else process.env.TRANSCRIBE_REMOTE_URL = priorUrl;
+  if (priorModel === undefined) delete process.env.TRANSCRIBE_WHISPER_MODEL;
+  else process.env.TRANSCRIBE_WHISPER_MODEL = priorModel;
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
@@ -58,15 +61,18 @@ describe('remote Whisper HTTP contract', () => {
       polls += 1;
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
         status,
-        ...(status === 'completed' ? { segments: [{ start: 1, end: 2.5, text: ' hello ' }] } : {}),
+        ...(status === 'completed' ? { model: 'turbo', segments: [{ start: 1, end: 2.5, text: ' hello ' }] } : {}),
       }));
     });
     process.env.TRANSCRIBE_WHISPER_BACKEND = 'remote';
-    const segments = await transcribeWithWhisper(await audio(), tmpdir(), 'zh');
+    // 客户端配的是 large-v3，服务端实际用的是 turbo：标签必须跟服务端走
+    process.env.TRANSCRIBE_WHISPER_MODEL = 'large-v3';
+    const { segments, source } = await transcribeWithWhisper(await audio(), tmpdir(), 'zh');
     expect(uploaded).toEqual(Buffer.from('RIFFsynthetic-wave-bytes'));
     expect(polls).toBe(completeAtPoll + 1);
     if (longQueue) expect(Date.now() - startedAt).toBeGreaterThan(60_000);
     expect(segments).toEqual([{ start: 1, end: 2.5, text: 'hello' }]);
+    expect(source).toBe('whisper_turbo');
   }, process.env.TRANSCRIBE_TEST_LONG_QUEUE === '1' ? 90_000 : 30_000);
 
   it('reports a missing URL before attempting local Whisper', async () => {
@@ -161,4 +167,46 @@ describe('remote Whisper HTTP contract', () => {
       clearTimeout(timer);
     }
   }, 5_000);
+
+  it('labels the transcript with the server-reported model, not the client config', async () => {
+    process.env.TRANSCRIBE_REMOTE_URL = await serve((req, res) => {
+      if (req.method === 'POST') {
+        req.resume();
+        res.writeHead(202, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jobId: JOB_ID }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+          status: 'completed',
+          model: 'large-v3-turbo',
+          segments: [{ start: 0, end: 1, text: 'hi' }],
+        }));
+      }
+    });
+    process.env.TRANSCRIBE_WHISPER_BACKEND = 'remote';
+    process.env.TRANSCRIBE_WHISPER_MODEL = 'large-v3';
+
+    const { source } = await transcribeWithWhisper(await audio(), tmpdir());
+
+    expect(source).toBe('whisper_large_v3_turbo');
+  });
+
+  it('falls back to whisper_unknown when the server reports no model', async () => {
+    process.env.TRANSCRIBE_REMOTE_URL = await serve((req, res) => {
+      if (req.method === 'POST') {
+        req.resume();
+        res.writeHead(202, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jobId: JOB_ID }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+          status: 'completed',
+          segments: [{ start: 0, end: 1, text: 'hi' }],
+        }));
+      }
+    });
+    process.env.TRANSCRIBE_WHISPER_BACKEND = 'remote';
+    process.env.TRANSCRIBE_WHISPER_MODEL = 'large-v3';
+
+    const { source } = await transcribeWithWhisper(await audio(), tmpdir());
+
+    // 不拿客户端配置顶替——那个值可能完全是错的
+    expect(source).toBe('whisper_unknown');
+  });
 });
