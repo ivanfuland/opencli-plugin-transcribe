@@ -24,6 +24,9 @@ function whisperSource(model) {
 function resolveWhisperSource(env = process.env) {
   return whisperSource(resolveWhisperModel(env));
 }
+function whisperRunLabel(env = process.env) {
+  return resolveWhisperBackend(env) === "remote" ? "remote" : resolveWhisperModel(env);
+}
 function resolveWhisperBackend(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
@@ -236,5 +239,6 @@ export {
   resolveWhisperModel,
   resolveWhisperSource,
   transcribeWithWhisper,
+  whisperRunLabel,
   whisperSource
 };
