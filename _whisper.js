@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkFasterWhisper, checkWhisper } from "./_deps.js";
+import { effectiveEnv } from "./_config.js";
 import { TranscribeError } from "./_errors.js";
 const WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
 const REMOTE_REQUEST_TIMEOUT_MS = 10 * 60 * 1e3;
@@ -13,7 +14,7 @@ const DEFAULT_WHISPER_MODEL = "large-v3";
 const DEFAULT_COMPUTE_TYPE = "int8_float16";
 const DEFAULT_FASTER_WHISPER_PYTHON = "python3";
 const FASTER_WHISPER_SCRIPT = fileURLToPath(new URL("./_faster_whisper.py", import.meta.url));
-function resolveWhisperModel(env = process.env) {
+function resolveWhisperModel(env = effectiveEnv()) {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
@@ -21,13 +22,13 @@ function whisperSource(model) {
   const slug = model.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return `whisper_${slug || "unknown"}`;
 }
-function resolveWhisperSource(env = process.env) {
+function resolveWhisperSource(env = effectiveEnv()) {
   return whisperSource(resolveWhisperModel(env));
 }
-function whisperRunLabel(env = process.env) {
+function whisperRunLabel(env = effectiveEnv()) {
   return resolveWhisperBackend(env) === "remote" ? "remote" : resolveWhisperModel(env);
 }
-function resolveWhisperBackend(env = process.env) {
+function resolveWhisperBackend(env = effectiveEnv()) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
   if (fromEnv === "faster-whisper") return "faster-whisper";
@@ -36,7 +37,7 @@ function resolveWhisperBackend(env = process.env) {
     `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai", "faster-whisper", or "remote".`
   );
 }
-function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
+function buildWhisperCommand(audioPath, outputDir, lang, env = effectiveEnv()) {
   const backend = resolveWhisperBackend(env);
   if (backend === "remote") throw new TranscribeError("Remote Whisper does not use a local command");
   const model = resolveWhisperModel(env);
@@ -58,9 +59,9 @@ function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
   };
 }
 const UNKNOWN_MODEL_SOURCE = whisperSource("");
-async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal) {
-  if (resolveWhisperBackend() === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
-  const command = buildWhisperCommand(audioPath, outputDir, lang);
+async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal, env = effectiveEnv()) {
+  if (resolveWhisperBackend(env) === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal, env);
+  const command = buildWhisperCommand(audioPath, outputDir, lang, env);
   if (command.backend === "openai") await checkWhisper();
   else await checkFasterWhisper(command.cmd);
   const stem = path.basename(audioPath, path.extname(audioPath));
@@ -95,10 +96,10 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
       text: String(s.text).trim()
     })),
     // 本地后端：模型就是本地配置选的那个，标签与之一致
-    source: resolveWhisperSource()
+    source: resolveWhisperSource(env)
   };
 }
-function remoteBaseUrl(env = process.env) {
+function remoteBaseUrl(env = effectiveEnv()) {
   const value = env.TRANSCRIBE_REMOTE_URL?.trim();
   if (!value) throw new TranscribeError("TRANSCRIBE_REMOTE_URL is required for the remote Whisper backend");
   let url;
@@ -133,8 +134,8 @@ async function remoteRequest(url, init, signal) {
     redirect: "error"
   });
 }
-async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal) {
-  const base = remoteBaseUrl();
+async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal, env = effectiveEnv()) {
+  const base = remoteBaseUrl(env);
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new TranscribeError("Remote Whisper timeout must be a positive number of seconds");
   }

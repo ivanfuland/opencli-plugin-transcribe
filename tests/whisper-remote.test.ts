@@ -10,6 +10,7 @@ const JOB_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 const priorBackend = process.env.TRANSCRIBE_WHISPER_BACKEND;
 const priorUrl = process.env.TRANSCRIBE_REMOTE_URL;
 const priorModel = process.env.TRANSCRIBE_WHISPER_MODEL;
+const priorConfigFile = process.env.TRANSCRIBE_CONFIG_FILE;
 const servers: Server[] = [];
 const dirs: string[] = [];
 
@@ -19,6 +20,14 @@ async function audio(): Promise<string> {
   const path = join(dir, 'audio.wav');
   await writeFile(path, Buffer.from('RIFFsynthetic-wave-bytes'));
   return path;
+}
+
+async function configFile(content: Record<string, unknown>): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-whisper-cfg-'));
+  dirs.push(dir);
+  const file = join(dir, 'transcribe.json');
+  await writeFile(file, JSON.stringify(content));
+  return file;
 }
 
 async function serve(handler: Parameters<typeof createServer>[0]): Promise<string> {
@@ -37,6 +46,8 @@ afterEach(async () => {
   else process.env.TRANSCRIBE_REMOTE_URL = priorUrl;
   if (priorModel === undefined) delete process.env.TRANSCRIBE_WHISPER_MODEL;
   else process.env.TRANSCRIBE_WHISPER_MODEL = priorModel;
+  if (priorConfigFile === undefined) delete process.env.TRANSCRIBE_CONFIG_FILE;
+  else process.env.TRANSCRIBE_CONFIG_FILE = priorConfigFile;
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
@@ -209,4 +220,31 @@ describe('remote Whisper HTTP contract', () => {
     // 不拿客户端配置顶替——那个值可能完全是错的
     expect(source).toBe('whisper_unknown');
   });
+  it('takes the remote path from the config file alone, with no TRANSCRIBE_* in the environment', async () => {
+    // 这就是加配置文件要证的那件事：调用方的环境里什么都没有，行为仍然一致。
+    let uploaded = Buffer.alloc(0);
+    const base = await serve(async (req, res) => {
+      if (req.method === 'POST') {
+        for await (const chunk of req) uploaded = Buffer.concat([uploaded, chunk]);
+        res.writeHead(202, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jobId: JOB_ID }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+        status: 'completed',
+        model: 'turbo',
+        segments: [{ start: 0, end: 1, text: 'hi' }],
+      }));
+    });
+
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('TRANSCRIBE_')) delete process.env[key];
+    }
+    process.env.TRANSCRIBE_CONFIG_FILE = await configFile({ backend: 'remote', remoteUrl: base, model: 'turbo' });
+
+    const { segments, source } = await transcribeWithWhisper(await audio(), tmpdir(), 'zh');
+
+    expect(uploaded.byteLength).toBeGreaterThan(0); // 真的走到了上传
+    expect(segments).toEqual([{ start: 0, end: 1, text: 'hi' }]);
+    expect(source).toBe('whisper_turbo');
+  }, 30_000);
 });

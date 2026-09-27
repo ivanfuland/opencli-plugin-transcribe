@@ -73,6 +73,29 @@ opencli list | grep transcribe
 | `TRANSCRIBE_WHISPER_COMPUTE_TYPE` | `int8_float16` | 仅 faster-whisper：CTranslate2 计算精度，如 `float16`、`int8_float16`；回落到 CPU 时自动改用 `int8` |
 | `TRANSCRIBE_FASTER_WHISPER_PYTHON` | `python3` | 仅 faster-whisper：能 `import faster_whisper` 的 Python 解释器，通常指向专用 venv |
 
+### 配置文件（推荐）
+
+环境变量在进程启动那一刻就从父进程抄定了。于是同一条命令在终端里、在 agent 的 Bash 里、在 `ssh host '...'` 里看到的后端可能各不相同——「调用 `transcribe`」这件事因此对调用方不透明。放一份用户级配置文件可以消掉这一点：它在运行时读，任何调用方看到的都一样。
+
+```
+~/.config/opencli/transcribe.json
+{
+  "backend": "remote",
+  "remoteUrl": "http://transcribe-host:4000",
+  "model": "turbo"
+}
+```
+
+| 键 | 对应的环境变量 |
+|---|---|
+| `backend` | `TRANSCRIBE_WHISPER_BACKEND` |
+| `remoteUrl` | `TRANSCRIBE_REMOTE_URL` |
+| `model` | `TRANSCRIBE_WHISPER_MODEL` |
+| `fasterWhisperPython` | `TRANSCRIBE_FASTER_WHISPER_PYTHON` |
+| `computeType` | `TRANSCRIBE_WHISPER_COMPUTE_TYPE` |
+
+优先级：**非空的环境变量 > 配置文件 > 内置默认**。空串按未设处理——一个空变量不该把机器级设置顶掉。用 `TRANSCRIBE_CONFIG_FILE` 可以指向别的文件（测试靠它把配置关掉）。文件不存在、JSON 坏、值不是字符串，都只会退回内置默认，不会让转写失败。
+
 faster-whisper 后端的 GPU 运行库：CTranslate2 需要 CUDA 12 的 cuBLAS 和 cuDNN 9。可以在同一个 venv 里装 `nvidia-cublas-cu12` 与 `nvidia-cudnn-cu12==9.*`，脚本启动时会自动预加载，不需要设置 `LD_LIBRARY_PATH`：
 
 ```bash

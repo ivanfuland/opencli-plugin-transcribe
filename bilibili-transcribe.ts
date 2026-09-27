@@ -17,7 +17,8 @@ import { createHash } from 'node:crypto';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio } from './_download.js';
-import { whisperRunLabel, transcribeWithWhisper } from './_whisper.js';
+import { effectiveEnv } from './_config.js';
+import { resolveWhisperBackend, whisperRunLabel, transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
@@ -81,8 +82,10 @@ cli({
 
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     stopIfSubsOnly(subsOnly);
-    console.error(`[transcribe] 未找到字幕，回落到 Whisper ASR（${whisperRunLabel()}）...`);
-    const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === 'remote';
+    // 一次调用读一次配置：标签、超时判断与实际转写共用同一份快照，中途改文件不会前后不一致
+    const env = effectiveEnv();
+    console.error(`[transcribe] 未找到字幕，回落到 Whisper ASR（${whisperRunLabel(env)}）...`);
+    const remoteMode = resolveWhisperBackend(env) === 'remote';
     const remainingMs = timeoutSeconds * 1000 - (Date.now() - commandStartedAt);
     if (remoteMode && remainingMs <= 0) throw new TranscribeError('Remote Whisper command timed out');
     const tempDir = createTempDir();
@@ -96,7 +99,7 @@ cli({
       console.error('[transcribe] 正在通过 yt-dlp 下载音频...');
       const audioPath = await downloadAudio(videoUrl, tempDir, 'chrome', remoteDeadline?.signal);
       console.error('[transcribe] 音频就绪，开始 Whisper 转录（可能需要数分钟）...');
-      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
+      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal, env);
 
       if (segments.length === 0) {
         throw new TranscribeError('Whisper 没有返回任何片段，音频可能过短或无声。');

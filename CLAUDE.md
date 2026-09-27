@@ -30,7 +30,7 @@ opencli plugin install github:ivanfuland/opencli-plugin-transcribe
 - 源码 `.ts`，编译产物 `.js` 一并提交（opencli 运行时直接加载 `.js`）
 - opencli 只扫描插件根目录的 `.js` 文件作为命令，不能移入 `src/` 子目录
 - 命令文件：`youtube-transcribe.ts`、`bilibili-transcribe.ts`
-- 内部模块以 `_` 前缀命名：`_download.ts`、`_whisper.ts`、`_format.ts`、`_lang-map.ts`、`_temp.ts`、`_errors.ts`、`_deps.ts`
+- 内部模块以 `_` 前缀命名：`_download.ts`、`_whisper.ts`、`_config.ts`、`_format.ts`、`_lang-map.ts`、`_temp.ts`、`_errors.ts`、`_deps.ts`
 
 ## YouTube 字幕获取流程
 
@@ -61,6 +61,7 @@ opencli plugin install github:ivanfuland/opencli-plugin-transcribe
 - CPU 模式已知有问题，不修复
 - 模型默认 `large-v3`（4090 上使用）；`TRANSCRIBE_WHISPER_MODEL` 环境变量可改用更小的模型，给显存放不下 large-v3 的机器（如 8GB 的 RTX 4060 Laptop）用。解析逻辑在 `_whisper.ts` 的 `resolveWhisperModel()`，有单测
 - 三个后端：默认 openai-whisper 命令行；`TRANSCRIBE_WHISPER_BACKEND=faster-whisper` 时运行根目录的 `_faster_whisper.py`；`remote` 时流式上传 WAV 到 `TRANSCRIBE_REMOTE_URL` 并轮询结果，不检查本地模型也不回落本地。命令由纯函数 `buildWhisperCommand()` 拼出，单测覆盖两个本地后端；远端走本地假 HTTP 服务测试
+- 配置有两层：用户级 `~/.config/opencli/transcribe.json`（键到环境变量的映射在 `_config.ts`），以及覆盖它的环境变量。**优先级：非空环境变量 > 配置文件 > 内置默认**，空串按未设处理。加这层是因为环境变量在进程启动那一刻就定死了，「同一条命令在不同调用方看到的后端不同」会让 `transcribe` 对调用方不透明（2026-09-27 实测翻车两次：旧窗格起的会话、非交互 ssh）。所有解析函数的默认参数走 `effectiveEnv()`，**不要改回 `process.env`**
 - opencli 1.8.7 只读取命令 `args` 中的 `timeout` 参数，顶层 `timeoutSeconds` 不生效。两条转写命令都声明默认 25200 秒；远端后端必须在自己的截止时间中止请求，不能只靠 opencli 的 Promise race
 - `_faster_whisper.py` 启动时用 ctypes 预加载 `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheel 里的库：CTranslate2 按 soname dlopen 这些库，而 site-packages 不在加载路径上，进程内又改不了 `LD_LIBRARY_PATH`。去掉预加载会报 `libcublas.so.12 is not found`
 
