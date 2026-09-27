@@ -12,19 +12,21 @@
  * LANG_PREFERENCE, exact before prefix.
  *
  * Note: yt-dlp's `automatic_captions` contains the video's original ASR caption
- * AND all YouTube auto-translations. Three details are what actually steer the
- * picker toward the original ASR instead of a translated track:
+ * AND all YouTube auto-translations. Two details steer the picker toward the
+ * original ASR instead of a translated track:
  *
- *   - The video language is resolved (exact, then prefix) before the fallback
- *     table is consulted at all. Running the whole table's *exact* pass first
- *     let an unrelated language win on an exact hit: measured on aircAruvnKk
- *     (`info.language=en-US`, manual has both `en` and `zh`), the picker
- *     returned manual `zh`.
+ *   - Auto tracks prefer the `-orig` variant: it is the original ASR, while the
+ *     unsuffixed key may be a YouTube auto-translation. On the one video
+ *     compared the two tracks were byte-identical, so treat this as a
+ *     preference, not a guarantee of better text.
  *   - Suffixed tags also try their base language (`en-US` → `en`). The prefix
  *     rule compares whole keys, so it covers `en-US` against a bare `en` key
  *     but not against `en-CA` — only the base form reaches those.
- *   - Auto tracks prefer the `-orig` variant: it is the original ASR, while the
- *     unsuffixed key may be a YouTube auto-translation.
+ *
+ * Both are hardening of this function's own contract, not fixes for an
+ * observed failure: the YouTube entry maps `info.language` through `langMap`
+ * before calling, so it never passes a suffixed value, and on the videos
+ * compared the picker returned the same track before and after.
  */
 
 /** Fallback preference when neither userLang nor videoLang match anything. */

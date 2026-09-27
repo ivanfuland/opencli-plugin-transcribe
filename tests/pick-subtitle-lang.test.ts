@@ -37,29 +37,29 @@ describe('pickSubtitleLang', () => {
     expect(pickSubtitleLang([], [], '', 'en')).toBeNull();
   });
 
-  // ── 区域后缀：实测 aircAruvnKk（info.language=en-US，manual 同时有 en 与 zh）──
-  // 旧实现返回 manual zh：整张候选表精确匹完才轮到前缀匹配，而 en-US 与裸 en
-  // 不精确相等，于是表里排在 en 前面的 zh 先把视频截走了。
-  const realManual = ['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'zh', 'zh-CN', 'zh-TW'];
-  const realAuto = ['en', 'en-orig', 'zh', 'zh-CN', 'zh-Hans', 'zh-Hant', 'zh-TW'];
+  // ── 带后缀的 videoLang：钉的是本函数自己的契约，不是已复现的真实场景 ──
+  // YouTube 入口在调用前会用 langMap 归一化 info.language（en-US → en），
+  // 所以带后缀的值不是它今天会传进来的形态。字幕表取自一条真实视频的形状。
+  const manualEnAndZh = ['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'zh', 'zh-CN', 'zh-TW'];
+  const autoEnAndOrig = ['en', 'en-orig', 'zh', 'zh-CN', 'zh-Hans', 'zh-Hant', 'zh-TW'];
 
-  it('区域后缀的原语言不再被兜底表截胡（en-US 视频 + manual en/zh → en）', () => {
-    expect(pickSubtitleLang(realManual, realAuto, '', 'en-US')).toEqual({ lang: 'en', isAuto: false });
+  it('带后缀的视频语言优先于兜底表的精确命中（videoLang=en-US + manual en/zh → en）', () => {
+    expect(pickSubtitleLang(manualEnAndZh, autoEnAndOrig, '', 'en-US')).toEqual({ lang: 'en', isAuto: false });
   });
 
-  it('无区域后缀时行为不变（en 视频 + manual en/zh → en）', () => {
-    expect(pickSubtitleLang(realManual, realAuto, '', 'en')).toEqual({ lang: 'en', isAuto: false });
+  it('无后缀时行为不变（en 视频 + manual en/zh → en）', () => {
+    expect(pickSubtitleLang(manualEnAndZh, autoEnAndOrig, '', 'en')).toEqual({ lang: 'en', isAuto: false });
   });
 
   it('自动轨优先 -orig（原始 ASR），同名普通轨排其后', () => {
-    expect(pickSubtitleLang([], realAuto, '', 'en')).toEqual({ lang: 'en-orig', isAuto: true });
+    expect(pickSubtitleLang([], autoEnAndOrig, '', 'en')).toEqual({ lang: 'en-orig', isAuto: true });
   });
 
-  it('原语言的模糊匹配优先于兜底表的精确命中（en-US 视频 + en-CA 轨）', () => {
+  it('原语言的模糊匹配优先于兜底表的精确命中（videoLang=en-US + en-CA 轨）', () => {
     expect(pickSubtitleLang([], ['en-CA', 'zh-Hans'], '', 'en-US')).toEqual({ lang: 'en-CA', isAuto: true });
   });
 
-  it('英文视频没有 en 轨时选 en-orig，不再退到中文轨', () => {
+  it('英文视频的自动轨里没有 en 时选 en-orig，不再退到中文轨', () => {
     expect(pickSubtitleLang([], ['en-orig', 'zh-Hans', 'zh-Hant'], '', 'en')).toEqual({
       lang: 'en-orig',
       isAuto: true,
