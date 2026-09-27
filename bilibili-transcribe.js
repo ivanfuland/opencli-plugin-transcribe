@@ -157,9 +157,59 @@ async function downloadAudio(url, outputDir, cookiesBrowser = "chrome", signal) 
 
 // _whisper.js
 import { execFile as execFile3 } from "node:child_process";
-import * as fs from "node:fs";
-import * as path2 from "node:path";
+import * as fs2 from "node:fs";
+import * as path3 from "node:path";
 import { fileURLToPath } from "node:url";
+
+// _config.js
+import fs from "node:fs";
+import os from "node:os";
+import path2 from "node:path";
+var CONFIG_KEYS = {
+  backend: "TRANSCRIBE_WHISPER_BACKEND",
+  remoteUrl: "TRANSCRIBE_REMOTE_URL",
+  model: "TRANSCRIBE_WHISPER_MODEL",
+  fasterWhisperPython: "TRANSCRIBE_FASTER_WHISPER_PYTHON",
+  computeType: "TRANSCRIBE_WHISPER_COMPUTE_TYPE"
+};
+function defaultConfigPath() {
+  return path2.join(os.homedir(), ".config", "opencli", "transcribe.json");
+}
+function configPath(env = process.env) {
+  const fromEnv = env.TRANSCRIBE_CONFIG_FILE?.trim();
+  return fromEnv || defaultConfigPath();
+}
+function loadConfigFile(filePath = configPath()) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return {};
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error(`[transcribe] config file is not valid JSON, ignoring it: ${filePath}`);
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const out = {};
+  for (const [key, envName] of Object.entries(CONFIG_KEYS)) {
+    const value = parsed[key];
+    if (typeof value === "string" && value.trim()) out[envName] = value.trim();
+  }
+  return out;
+}
+function effectiveEnv(env = process.env) {
+  const merged = { ...env };
+  for (const [name, value] of Object.entries(loadConfigFile(configPath(env)))) {
+    if (!merged[name]?.trim()) merged[name] = value;
+  }
+  return merged;
+}
+
+// _whisper.js
 var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
 var REMOTE_REQUEST_TIMEOUT_MS = 10 * 60 * 1e3;
 var REMOTE_POLL_INTERVAL_MS = 1e4;
@@ -169,7 +219,7 @@ var DEFAULT_WHISPER_MODEL = "large-v3";
 var DEFAULT_COMPUTE_TYPE = "int8_float16";
 var DEFAULT_FASTER_WHISPER_PYTHON = "python3";
 var FASTER_WHISPER_SCRIPT = fileURLToPath(new URL("./_faster_whisper.py", import.meta.url));
-function resolveWhisperModel(env = process.env) {
+function resolveWhisperModel(env = effectiveEnv()) {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
@@ -177,13 +227,13 @@ function whisperSource(model) {
   const slug = model.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return `whisper_${slug || "unknown"}`;
 }
-function resolveWhisperSource(env = process.env) {
+function resolveWhisperSource(env = effectiveEnv()) {
   return whisperSource(resolveWhisperModel(env));
 }
-function whisperRunLabel(env = process.env) {
+function whisperRunLabel(env = effectiveEnv()) {
   return resolveWhisperBackend(env) === "remote" ? "remote" : resolveWhisperModel(env);
 }
-function resolveWhisperBackend(env = process.env) {
+function resolveWhisperBackend(env = effectiveEnv()) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
   if (fromEnv === "faster-whisper") return "faster-whisper";
@@ -192,7 +242,7 @@ function resolveWhisperBackend(env = process.env) {
     `Unknown TRANSCRIBE_WHISPER_BACKEND "${env.TRANSCRIBE_WHISPER_BACKEND}". Use "openai", "faster-whisper", or "remote".`
   );
 }
-function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
+function buildWhisperCommand(audioPath, outputDir, lang, env = effectiveEnv()) {
   const backend = resolveWhisperBackend(env);
   if (backend === "remote") throw new TranscribeError("Remote Whisper does not use a local command");
   const model = resolveWhisperModel(env);
@@ -219,8 +269,8 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
   const command = buildWhisperCommand(audioPath, outputDir, lang);
   if (command.backend === "openai") await checkWhisper();
   else await checkFasterWhisper(command.cmd);
-  const stem = path2.basename(audioPath, path2.extname(audioPath));
-  const jsonOutput = path2.join(outputDir, `${stem}.json`);
+  const stem = path3.basename(audioPath, path3.extname(audioPath));
+  const jsonOutput = path3.join(outputDir, `${stem}.json`);
   process.stderr.write(`[whisper] model: ${command.label}
 `);
   try {
@@ -236,7 +286,7 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
   }
   let parsed;
   try {
-    const raw = fs.readFileSync(jsonOutput, "utf-8");
+    const raw = fs2.readFileSync(jsonOutput, "utf-8");
     parsed = JSON.parse(raw);
   } catch (err) {
     throw new TranscribeError(
@@ -254,7 +304,7 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
     source: resolveWhisperSource()
   };
 }
-function remoteBaseUrl(env = process.env) {
+function remoteBaseUrl(env = effectiveEnv()) {
   const value = env.TRANSCRIBE_REMOTE_URL?.trim();
   if (!value) throw new TranscribeError("TRANSCRIBE_REMOTE_URL is required for the remote Whisper backend");
   let url;
@@ -311,7 +361,7 @@ async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal)
   try {
     const submitUrl = new URL(`${base}/api/whisper/jobs`);
     if (lang) submitUrl.searchParams.set("lang", lang);
-    upload = fs.createReadStream(audioPath);
+    upload = fs2.createReadStream(audioPath);
     const submitted = await remoteRequest(submitUrl.href, {
       method: "POST",
       headers: { "Content-Type": "audio/wav" },
@@ -446,11 +496,11 @@ function fmtTime(sec) {
 }
 
 // _temp.js
-import * as fs2 from "node:fs";
-import * as os from "node:os";
-import * as path3 from "node:path";
+import * as fs3 from "node:fs";
+import * as os2 from "node:os";
+import * as path4 from "node:path";
 function createTempDir() {
-  return fs2.mkdtempSync(path3.join(os.tmpdir(), "opencli-transcribe-"));
+  return fs3.mkdtempSync(path4.join(os2.tmpdir(), "opencli-transcribe-"));
 }
 function cleanupTempDir(dir, keepAudio) {
   if (keepAudio) {
@@ -458,14 +508,14 @@ function cleanupTempDir(dir, keepAudio) {
     return;
   }
   try {
-    fs2.rmSync(dir, { recursive: true, force: true });
+    fs3.rmSync(dir, { recursive: true, force: true });
   } catch {
   }
 }
 function registerCleanupHook(dir) {
   const handler = () => {
     try {
-      fs2.rmSync(dir, { recursive: true, force: true });
+      fs3.rmSync(dir, { recursive: true, force: true });
     } catch {
     }
   };
@@ -622,7 +672,7 @@ cli({
     }
     stopIfSubsOnly(subsOnly);
     console.error(`[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper ASR\uFF08${whisperRunLabel()}\uFF09...`);
-    const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === "remote";
+    const remoteMode = resolveWhisperBackend() === "remote";
     const remainingMs = timeoutSeconds * 1e3 - (Date.now() - commandStartedAt);
     if (remoteMode && remainingMs <= 0) throw new TranscribeError("Remote Whisper command timed out");
     const tempDir = createTempDir();

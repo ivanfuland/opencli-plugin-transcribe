@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio, downloadAudioFromUrl } from './_download.js';
-import { whisperRunLabel, transcribeWithWhisper } from './_whisper.js';
+import { resolveWhisperBackend, whisperRunLabel, transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
@@ -95,7 +95,7 @@ cli({
     // ── Step 2: Whisper fallback ─────────────────────────────────────────────
     stopIfSubsOnly(subsOnly);
     console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${whisperRunLabel()})...`);
-    const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === 'remote';
+    const remoteMode = resolveWhisperBackend() === 'remote';
     const remainingMs = timeoutSeconds * 1000 - (Date.now() - commandStartedAt);
     if (remoteMode && remainingMs <= 0) throw new TranscribeError('Remote Whisper command timed out');
     const tempDir = createTempDir();

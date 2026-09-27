@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkFasterWhisper, checkWhisper } from './_deps.js';
+import { effectiveEnv } from './_config.js';
 import { TranscribeError } from './_errors.js';
 
 const WHISPER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -30,7 +31,7 @@ const FASTER_WHISPER_SCRIPT = fileURLToPath(new URL('./_faster_whisper.py', impo
 export type WhisperBackend = 'openai' | 'faster-whisper' | 'remote';
 
 /** Model name passed to `whisper --model`: TRANSCRIBE_WHISPER_MODEL if set and non-empty, else large-v3. */
-export function resolveWhisperModel(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveWhisperModel(env: NodeJS.ProcessEnv = effectiveEnv()): string {
   const fromEnv = env.TRANSCRIBE_WHISPER_MODEL?.trim();
   return fromEnv ? fromEnv : DEFAULT_WHISPER_MODEL;
 }
@@ -45,7 +46,7 @@ export function whisperSource(model: string): `whisper_${string}` {
 }
 
 /** `source` value for the model TRANSCRIBE_WHISPER_MODEL selects. */
-export function resolveWhisperSource(env: NodeJS.ProcessEnv = process.env): `whisper_${string}` {
+export function resolveWhisperSource(env: NodeJS.ProcessEnv = effectiveEnv()): `whisper_${string}` {
   return whisperSource(resolveWhisperModel(env));
 }
 
@@ -54,12 +55,12 @@ export function resolveWhisperSource(env: NodeJS.ProcessEnv = process.env): `whi
  * 根本不会被用到（宿主机没设 `TRANSCRIBE_WHISPER_MODEL`，报它会写成 large-v3，而实际是服务端的
  * turbo）。契约同 `source` 标签：只能报真的。
  */
-export function whisperRunLabel(env: NodeJS.ProcessEnv = process.env): string {
+export function whisperRunLabel(env: NodeJS.ProcessEnv = effectiveEnv()): string {
   return resolveWhisperBackend(env) === 'remote' ? 'remote' : resolveWhisperModel(env);
 }
 
 /** TRANSCRIBE_WHISPER_BACKEND: unset or blank means openai; anything other than the three names is an error. */
-export function resolveWhisperBackend(env: NodeJS.ProcessEnv = process.env): WhisperBackend {
+export function resolveWhisperBackend(env: NodeJS.ProcessEnv = effectiveEnv()): WhisperBackend {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === 'openai') return 'openai';
   if (fromEnv === 'faster-whisper') return 'faster-whisper';
@@ -83,7 +84,7 @@ export function buildWhisperCommand(
   audioPath: string,
   outputDir: string,
   lang?: string,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = effectiveEnv(),
 ): WhisperCommand {
   const backend = resolveWhisperBackend(env);
   if (backend === 'remote') throw new TranscribeError('Remote Whisper does not use a local command');
@@ -185,7 +186,7 @@ export async function transcribeWithWhisper(
   };
 }
 
-function remoteBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+function remoteBaseUrl(env: NodeJS.ProcessEnv = effectiveEnv()): string {
   const value = env.TRANSCRIBE_REMOTE_URL?.trim();
   if (!value) throw new TranscribeError('TRANSCRIBE_REMOTE_URL is required for the remote Whisper backend');
   let url: URL;

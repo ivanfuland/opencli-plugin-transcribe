@@ -8,5 +8,7 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
+    // 跑测试的人自己那份 ~/.config/opencli/transcribe.json 不该影响结果
+    env: { TRANSCRIBE_CONFIG_FILE: '/nonexistent/cc-transcribe-config.json' },
   },
 });
