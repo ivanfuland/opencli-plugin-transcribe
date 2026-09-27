@@ -104,6 +104,21 @@ export interface WhisperSegment {
 }
 
 /**
+ * Whisper 的产出：片段，加上**实际用过的那个模型**的标签。
+ *
+ * 远端后端的模型由服务端决定，不是客户端配置——客户端那份可能完全是错的（宿主机上没设
+ * `TRANSCRIBE_WHISPER_MODEL`，拿默认值当标签会把 M16 跑的 turbo 写成 large_v3，而归档笔记里
+ * 这个标签是长期记录）。
+ */
+export interface WhisperOutcome {
+  segments: WhisperSegment[];
+  source: `whisper_${string}`;
+}
+
+/** 服务端没报告模型时的标签。不拿客户端配置顶替——那个值可能完全是错的。 */
+const UNKNOWN_MODEL_SOURCE: `whisper_${string}` = whisperSource('');
+
+/**
  * Run Whisper on an audio file and return parsed segments.
  * @param audioPath Path to WAV file. Use a fixed name (e.g., audio.wav) so output is predictable.
  * @param outputDir Directory where Whisper writes JSON output. Output: <outputDir>/audio.json
@@ -115,7 +130,7 @@ export async function transcribeWithWhisper(
   lang?: string,
   timeoutSeconds: number = DEFAULT_COMMAND_TIMEOUT_SECONDS,
   signal?: AbortSignal,
-): Promise<WhisperSegment[]> {
+): Promise<WhisperOutcome> {
   if (resolveWhisperBackend() === 'remote') return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
   const command = buildWhisperCommand(audioPath, outputDir, lang);
   if (command.backend === 'openai') await checkWhisper();
@@ -150,11 +165,15 @@ export async function transcribeWithWhisper(
   }
 
   const segments = parsed.segments ?? [];
-  return segments.map(s => ({
-    start: Number(s.start),
-    end: Number(s.end),
-    text: String(s.text).trim(),
-  }));
+  return {
+    segments: segments.map(s => ({
+      start: Number(s.start),
+      end: Number(s.end),
+      text: String(s.text).trim(),
+    })),
+    // 本地后端：模型就是本地配置选的那个，标签与之一致
+    source: resolveWhisperSource(),
+  };
 }
 
 function remoteBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -195,7 +214,7 @@ async function remoteRequest(url: string, init: RequestInit & { duplex?: 'half' 
   });
 }
 
-async function transcribeRemote(audioPath: string, lang: string | undefined, timeoutSeconds: number, upstreamSignal?: AbortSignal): Promise<WhisperSegment[]> {
+async function transcribeRemote(audioPath: string, lang: string | undefined, timeoutSeconds: number, upstreamSignal?: AbortSignal): Promise<WhisperOutcome> {
   const base = remoteBaseUrl();
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new TranscribeError('Remote Whisper timeout must be a positive number of seconds');
@@ -237,12 +256,17 @@ async function transcribeRemote(audioPath: string, lang: string | undefined, tim
       if (!response.ok) throw new TranscribeError(`Remote Whisper status failed: HTTP ${response.status}`);
       const result = await response.json() as {
         status?: unknown;
+        model?: unknown;
         segments?: Array<{ start: unknown; end: unknown; text: unknown }>;
         error?: unknown;
       };
       if (result.status === 'completed') {
         if (!Array.isArray(result.segments)) throw new TranscribeError('Remote Whisper result has no segments');
-        return result.segments.map(segment => {
+        // 服务端 GET 的 model 字段就是它实际用的模型；标签用它，不用客户端配置
+        const source = typeof result.model === 'string' && result.model.trim()
+          ? whisperSource(result.model)
+          : UNKNOWN_MODEL_SOURCE;
+        const segments = result.segments.map(segment => {
           if (
             !segment || typeof segment.start !== 'number' || !Number.isFinite(segment.start) || segment.start < 0 ||
             typeof segment.end !== 'number' || !Number.isFinite(segment.end) || segment.end < segment.start ||
@@ -252,6 +276,7 @@ async function transcribeRemote(audioPath: string, lang: string | undefined, tim
           }
           return { start: segment.start, end: segment.end, text: segment.text.trim() };
         });
+        return { segments, source };
       }
       if (result.status === 'failed') {
         const summary = typeof result.error === 'string' ? result.error.slice(0, 200) : 'unknown error';

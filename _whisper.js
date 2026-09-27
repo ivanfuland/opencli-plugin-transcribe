@@ -54,6 +54,7 @@ function buildWhisperCommand(audioPath, outputDir, lang, env = process.env) {
     label: `${model} (faster-whisper, ${computeType})`
   };
 }
+const UNKNOWN_MODEL_SOURCE = whisperSource("");
 async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal) {
   if (resolveWhisperBackend() === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
   const command = buildWhisperCommand(audioPath, outputDir, lang);
@@ -84,11 +85,15 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
     );
   }
   const segments = parsed.segments ?? [];
-  return segments.map((s) => ({
-    start: Number(s.start),
-    end: Number(s.end),
-    text: String(s.text).trim()
-  }));
+  return {
+    segments: segments.map((s) => ({
+      start: Number(s.start),
+      end: Number(s.end),
+      text: String(s.text).trim()
+    })),
+    // 本地后端：模型就是本地配置选的那个，标签与之一致
+    source: resolveWhisperSource()
+  };
 }
 function remoteBaseUrl(env = process.env) {
   const value = env.TRANSCRIBE_REMOTE_URL?.trim();
@@ -167,12 +172,14 @@ async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal)
       const result = await response.json();
       if (result.status === "completed") {
         if (!Array.isArray(result.segments)) throw new TranscribeError("Remote Whisper result has no segments");
-        return result.segments.map((segment) => {
+        const source = typeof result.model === "string" && result.model.trim() ? whisperSource(result.model) : UNKNOWN_MODEL_SOURCE;
+        const segments = result.segments.map((segment) => {
           if (!segment || typeof segment.start !== "number" || !Number.isFinite(segment.start) || segment.start < 0 || typeof segment.end !== "number" || !Number.isFinite(segment.end) || segment.end < segment.start || typeof segment.text !== "string" || !segment.text.trim()) {
             throw new TranscribeError("Remote Whisper returned an invalid segment");
           }
           return { start: segment.start, end: segment.end, text: segment.text.trim() };
         });
+        return { segments, source };
       }
       if (result.status === "failed") {
         const summary = typeof result.error === "string" ? result.error.slice(0, 200) : "unknown error";

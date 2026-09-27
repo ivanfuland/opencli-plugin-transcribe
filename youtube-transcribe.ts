@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { TranscribeError, assertAsrFlags, stopIfSubsOnly } from './_errors.js';
 import { downloadAudio, downloadAudioFromUrl } from './_download.js';
-import { resolveWhisperModel, resolveWhisperSource, transcribeWithWhisper } from './_whisper.js';
+import { resolveWhisperModel, transcribeWithWhisper } from './_whisper.js';
 import { formatRaw, formatGrouped, type Segment } from './_format.js';
 import { createTempDir, cleanupTempDir, registerCleanupHook } from './_temp.js';
 import { langMap } from './_lang-map.js';
@@ -115,15 +115,15 @@ cli({
         ? await downloadAudioFromUrl(ytAudioUrl, tempDir, remoteDeadline?.signal)
         : await downloadAudio(url, tempDir, 'chrome', remoteDeadline?.signal);
       console.error('[transcribe] Audio ready. Starting Whisper transcription (this may take several minutes)...');
-      const segments = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
+      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
 
       if (segments.length === 0) {
         throw new TranscribeError('Whisper returned no segments. The audio may be too short or silent.');
       }
 
       return mode === 'raw'
-        ? formatRaw(segments, resolveWhisperSource())
-        : formatGrouped(segments, resolveWhisperSource());
+        ? formatRaw(segments, source)
+        : formatGrouped(segments, source);
     } catch (error) {
       if (remoteDeadline?.signal.aborted) throw new TranscribeError('Remote Whisper command timed out');
       throw error;
