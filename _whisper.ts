@@ -49,6 +49,15 @@ export function resolveWhisperSource(env: NodeJS.ProcessEnv = process.env): `whi
   return whisperSource(resolveWhisperModel(env));
 }
 
+/**
+ * 日志里显示「这次用哪个转写器」。远端后端下只报 `remote`，不报本地模型名——客户端配的那个模型
+ * 根本不会被用到（宿主机没设 `TRANSCRIBE_WHISPER_MODEL`，报它会写成 large-v3，而实际是服务端的
+ * turbo）。契约同 `source` 标签：只能报真的。
+ */
+export function whisperRunLabel(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveWhisperBackend(env) === 'remote' ? 'remote' : resolveWhisperModel(env);
+}
+
 /** TRANSCRIBE_WHISPER_BACKEND: unset or blank means openai; anything other than the three names is an error. */
 export function resolveWhisperBackend(env: NodeJS.ProcessEnv = process.env): WhisperBackend {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();

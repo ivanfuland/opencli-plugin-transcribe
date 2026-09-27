@@ -214,6 +214,9 @@ function whisperSource(model) {
 function resolveWhisperSource(env = process.env) {
   return whisperSource(resolveWhisperModel(env));
 }
+function whisperRunLabel(env = process.env) {
+  return resolveWhisperBackend(env) === "remote" ? "remote" : resolveWhisperModel(env);
+}
 function resolveWhisperBackend(env = process.env) {
   const fromEnv = env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase();
   if (!fromEnv || fromEnv === "openai") return "openai";
@@ -645,7 +648,7 @@ cli({
       }
     }
     stopIfSubsOnly(subsOnly);
-    console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${resolveWhisperModel()})...`);
+    console.error(`[transcribe] No subtitles found. Falling back to Whisper ASR (${whisperRunLabel()})...`);
     const remoteMode = process.env.TRANSCRIBE_WHISPER_BACKEND?.trim().toLowerCase() === "remote";
     const remainingMs = timeoutSeconds * 1e3 - (Date.now() - commandStartedAt);
     if (remoteMode && remainingMs <= 0) throw new TranscribeError("Remote Whisper command timed out");
