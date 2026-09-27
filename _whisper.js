@@ -59,9 +59,9 @@ function buildWhisperCommand(audioPath, outputDir, lang, env = effectiveEnv()) {
   };
 }
 const UNKNOWN_MODEL_SOURCE = whisperSource("");
-async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal) {
-  if (resolveWhisperBackend() === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
-  const command = buildWhisperCommand(audioPath, outputDir, lang);
+async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal, env = effectiveEnv()) {
+  if (resolveWhisperBackend(env) === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal, env);
+  const command = buildWhisperCommand(audioPath, outputDir, lang, env);
   if (command.backend === "openai") await checkWhisper();
   else await checkFasterWhisper(command.cmd);
   const stem = path.basename(audioPath, path.extname(audioPath));
@@ -96,7 +96,7 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
       text: String(s.text).trim()
     })),
     // 本地后端：模型就是本地配置选的那个，标签与之一致
-    source: resolveWhisperSource()
+    source: resolveWhisperSource(env)
   };
 }
 function remoteBaseUrl(env = effectiveEnv()) {
@@ -134,8 +134,8 @@ async function remoteRequest(url, init, signal) {
     redirect: "error"
   });
 }
-async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal) {
-  const base = remoteBaseUrl();
+async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal, env = effectiveEnv()) {
+  const base = remoteBaseUrl(env);
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new TranscribeError("Remote Whisper timeout must be a positive number of seconds");
   }

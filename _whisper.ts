@@ -140,9 +140,11 @@ export async function transcribeWithWhisper(
   lang?: string,
   timeoutSeconds: number = DEFAULT_COMMAND_TIMEOUT_SECONDS,
   signal?: AbortSignal,
+  // 调用方算好的配置快照。默认自己算一次，这样库式调用也不会退回 process.env。
+  env: NodeJS.ProcessEnv = effectiveEnv(),
 ): Promise<WhisperOutcome> {
-  if (resolveWhisperBackend() === 'remote') return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
-  const command = buildWhisperCommand(audioPath, outputDir, lang);
+  if (resolveWhisperBackend(env) === 'remote') return transcribeRemote(audioPath, lang, timeoutSeconds, signal, env);
+  const command = buildWhisperCommand(audioPath, outputDir, lang, env);
   if (command.backend === 'openai') await checkWhisper();
   else await checkFasterWhisper(command.cmd);
 
@@ -182,7 +184,7 @@ export async function transcribeWithWhisper(
       text: String(s.text).trim(),
     })),
     // 本地后端：模型就是本地配置选的那个，标签与之一致
-    source: resolveWhisperSource(),
+    source: resolveWhisperSource(env),
   };
 }
 
@@ -224,8 +226,8 @@ async function remoteRequest(url: string, init: RequestInit & { duplex?: 'half' 
   });
 }
 
-async function transcribeRemote(audioPath: string, lang: string | undefined, timeoutSeconds: number, upstreamSignal?: AbortSignal): Promise<WhisperOutcome> {
-  const base = remoteBaseUrl();
+async function transcribeRemote(audioPath: string, lang: string | undefined, timeoutSeconds: number, upstreamSignal?: AbortSignal, env: NodeJS.ProcessEnv = effectiveEnv()): Promise<WhisperOutcome> {
+  const base = remoteBaseUrl(env);
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new TranscribeError('Remote Whisper timeout must be a positive number of seconds');
   }

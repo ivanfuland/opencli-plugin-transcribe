@@ -155,12 +155,6 @@ async function downloadAudio(url, outputDir, cookiesBrowser = "chrome", signal) 
   return outputPath;
 }
 
-// _whisper.js
-import { execFile as execFile3 } from "node:child_process";
-import * as fs2 from "node:fs";
-import * as path3 from "node:path";
-import { fileURLToPath } from "node:url";
-
 // _config.js
 import fs from "node:fs";
 import os from "node:os";
@@ -210,6 +204,10 @@ function effectiveEnv(env = process.env) {
 }
 
 // _whisper.js
+import { execFile as execFile3 } from "node:child_process";
+import * as fs2 from "node:fs";
+import * as path3 from "node:path";
+import { fileURLToPath } from "node:url";
 var WHISPER_TIMEOUT_MS = 30 * 60 * 1e3;
 var REMOTE_REQUEST_TIMEOUT_MS = 10 * 60 * 1e3;
 var REMOTE_POLL_INTERVAL_MS = 1e4;
@@ -264,9 +262,9 @@ function buildWhisperCommand(audioPath, outputDir, lang, env = effectiveEnv()) {
   };
 }
 var UNKNOWN_MODEL_SOURCE = whisperSource("");
-async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal) {
-  if (resolveWhisperBackend() === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal);
-  const command = buildWhisperCommand(audioPath, outputDir, lang);
+async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, signal, env = effectiveEnv()) {
+  if (resolveWhisperBackend(env) === "remote") return transcribeRemote(audioPath, lang, timeoutSeconds, signal, env);
+  const command = buildWhisperCommand(audioPath, outputDir, lang, env);
   if (command.backend === "openai") await checkWhisper();
   else await checkFasterWhisper(command.cmd);
   const stem = path3.basename(audioPath, path3.extname(audioPath));
@@ -301,7 +299,7 @@ async function transcribeWithWhisper(audioPath, outputDir, lang, timeoutSeconds 
       text: String(s.text).trim()
     })),
     // 本地后端：模型就是本地配置选的那个，标签与之一致
-    source: resolveWhisperSource()
+    source: resolveWhisperSource(env)
   };
 }
 function remoteBaseUrl(env = effectiveEnv()) {
@@ -339,8 +337,8 @@ async function remoteRequest(url, init, signal) {
     redirect: "error"
   });
 }
-async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal) {
-  const base = remoteBaseUrl();
+async function transcribeRemote(audioPath, lang, timeoutSeconds, upstreamSignal, env = effectiveEnv()) {
+  const base = remoteBaseUrl(env);
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new TranscribeError("Remote Whisper timeout must be a positive number of seconds");
   }
@@ -671,8 +669,9 @@ cli({
       }
     }
     stopIfSubsOnly(subsOnly);
-    console.error(`[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper ASR\uFF08${whisperRunLabel()}\uFF09...`);
-    const remoteMode = resolveWhisperBackend() === "remote";
+    const env = effectiveEnv();
+    console.error(`[transcribe] \u672A\u627E\u5230\u5B57\u5E55\uFF0C\u56DE\u843D\u5230 Whisper ASR\uFF08${whisperRunLabel(env)}\uFF09...`);
+    const remoteMode = resolveWhisperBackend(env) === "remote";
     const remainingMs = timeoutSeconds * 1e3 - (Date.now() - commandStartedAt);
     if (remoteMode && remainingMs <= 0) throw new TranscribeError("Remote Whisper command timed out");
     const tempDir = createTempDir();
@@ -683,7 +682,7 @@ cli({
       console.error("[transcribe] \u6B63\u5728\u901A\u8FC7 yt-dlp \u4E0B\u8F7D\u97F3\u9891...");
       const audioPath = await downloadAudio(videoUrl, tempDir, "chrome", remoteDeadline?.signal);
       console.error("[transcribe] \u97F3\u9891\u5C31\u7EEA\uFF0C\u5F00\u59CB Whisper \u8F6C\u5F55\uFF08\u53EF\u80FD\u9700\u8981\u6570\u5206\u949F\uFF09...");
-      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal);
+      const { segments, source } = await transcribeWithWhisper(audioPath, tempDir, whisperLang, timeoutSeconds, remoteDeadline?.signal, env);
       if (segments.length === 0) {
         throw new TranscribeError("Whisper \u6CA1\u6709\u8FD4\u56DE\u4EFB\u4F55\u7247\u6BB5\uFF0C\u97F3\u9891\u53EF\u80FD\u8FC7\u77ED\u6216\u65E0\u58F0\u3002");
       }
